@@ -83,8 +83,11 @@
           <i class="fa-brands fa-spotify"></i>
           <input type="text" id="spotify-url-input" class="spotify-url-input" placeholder="Cole uma URL de episódio do Spotify (ex: https://open.spotify.com/episode/...)" aria-label="Link do episódio do Spotify">
         </div>
-        <button class="btn-primary" id="btn-analyze" onclick="processSpotifyLink()">
+        <button class="btn-primary" id="btn-analyze" onclick="processSpotifyLink('transcribe')">
           <i class="fa-solid fa-wand-magic-sparkles"></i> Transcrever
+        </button>
+        <button class="btn-primary" id="btn-download-direct" onclick="processSpotifyLink('download')" style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: white;" title="Baixar Áudio Diretamente">
+          <i class="fa-solid fa-download"></i> Baixar Áudio
         </button>
       </div>
 
