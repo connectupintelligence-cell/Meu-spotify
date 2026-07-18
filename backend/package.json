@@ -1,0 +1,21 @@
+{
+  "name": "spotify-scribe-backend",
+  "version": "1.0.0",
+  "description": "Backend resolvedor de RSS e motor de transcrição por link para o Spotify Scribe",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "xml2js": "^0.6.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "private": true
+}

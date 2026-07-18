@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spotify Scribe - Transcritor Inteligente de Podcasts</title>
+  
+  <!-- Diagnostic Script for JS Errors -->
+  <script>
+    window.onerror = function(message, source, lineno, colno, error) {
+      const errDiv = document.createElement('div');
+      errDiv.id = 'js-debug-error-banner';
+      errDiv.style.position = 'fixed';
+      errDiv.style.top = '0';
+      errDiv.style.left = '0';
+      errDiv.style.width = '100%';
+      errDiv.style.backgroundColor = '#ef4444';
+      errDiv.style.color = 'white';
+      errDiv.style.padding = '16px';
+      errDiv.style.zIndex = '99999';
+      errDiv.style.fontFamily = 'monospace';
+      errDiv.style.fontSize = '13px';
+      errDiv.style.lineHeight = '1.5';
+      errDiv.style.boxShadow = '0 4px 20px rgba(0,0,0,0.5)';
+      errDiv.style.whiteSpace = 'pre-wrap';
+      errDiv.innerHTML = '<strong>[Erro de JS Detectado]</strong><br>' + 
+                          message + '<br>' +
+                          'Arquivo: ' + source.split('/').pop() + ' (Linha: ' + lineno + ', Coluna: ' + colno + ')';
+      document.body.appendChild(errDiv);
+      return false;
+    };
+  </script>
+
+  <!-- SEO Meta Tags -->
+  <meta name="description" content="Transcreva qualquer episódio do Spotify em segundos. Sincronize áudio e texto, pesquise termos, gere resumos automáticos por IA e guarde tudo na sua biblioteca.">
+  <meta name="keywords" content="spotify, transcrição, podcast, transcritor de áudio, whisper, ia, inteligência artificial, srt, legenda">
+  
+  <!-- FontAwesome & Google Fonts -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Ambient Glow Effects -->
+  <div class="ambient-glows">
+    <div class="glow-1"></div>
+    <div class="glow-2"></div>
+  </div>
+
+  <div class="app-container">
+    
+    <!-- Sidebar Left -->
+    <aside class="app-sidebar" id="app-sidebar-main">
+      <div class="brand">
+        <i class="fa-brands fa-spotify brand-logo"></i>
+        <span class="brand-name">Spotify Scribe</span>
+      </div>
+      
+      <ul class="nav-menu">
+        <li class="nav-item active" id="nav-home">
+          <a href="#" onclick="showHome()"><i class="fa-solid fa-house"></i> Início</a>
+        </li>
+        <li class="nav-item" id="nav-new-transcribe">
+          <a href="#" onclick="focusSearch()"><i class="fa-solid fa-circle-plus"></i> Transcrever Link</a>
+        </li>
+      </ul>
+      
+      <div class="library-section">
+        <span class="section-title">Biblioteca de Histórico</span>
+        <div class="library-list" id="history-list">
+          <!-- Dynamic History items go here -->
+          <div class="empty-library-msg" style="padding: 16px; text-align: center; color: var(--text-secondary); font-size: 0.8rem; line-height: 1.4;">
+            Nenhuma transcrição salva ainda. Cole um link do Spotify para começar!
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Header Panel -->
+    <header class="app-header" id="app-header-top">
+      <div class="header-search-container">
+        <div class="spotify-input-wrapper">
+          <i class="fa-brands fa-spotify"></i>
+          <input type="text" id="spotify-url-input" class="spotify-url-input" placeholder="Cole uma URL de episódio do Spotify (ex: https://open.spotify.com/episode/...)" aria-label="Link do episódio do Spotify">
+        </div>
+        <button class="btn-primary" id="btn-analyze" onclick="processSpotifyLink()">
+          <i class="fa-solid fa-wand-magic-sparkles"></i> Transcrever
+        </button>
+      </div>
+
+      <div class="user-controls">
+        <button class="btn-config" id="btn-open-settings" onclick="toggleSettingsModal(true)" title="Configurações de Transcrição">
+          <i class="fa-solid fa-gear"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Content Panel -->
+    <main class="app-main" id="app-main-panel">
+      
+      <!-- EMPTY STATE / LANDING SECTION -->
+      <section class="empty-state animated-fade-in" id="empty-state-view">
+        <i class="fa-solid fa-headphones-simple"></i>
+        <h2>Transforme Podcasts em Texto</h2>
+        <p>Insira um link do Spotify para simular uma transcrição ou suba o arquivo de áudio do episódio para transcrevê-lo localmente com IA.</p>
+        
+        <div class="quick-start-grid">
+          <div class="quick-start-card" onclick="loadMockEpisode('flow-artificial-intelligence')">
+            <h4>Flow Podcast <i class="fa-solid fa-arrow-right"></i></h4>
+            <p>IA e o Impacto Social (curado, sincronizado)</p>
+          </div>
+          <div class="quick-start-card" onclick="loadMockEpisode('nerdcast-tecnologia-futuro')">
+            <h4>NerdCast 999 <i class="fa-solid fa-arrow-right"></i></h4>
+            <p>Redes Neurais e Fronteira (curado, sincronizado)</p>
+          </div>
+          <div class="quick-start-card" onclick="loadMockEpisode('podpah-tecnologia-favela')">
+            <h4>Podpah #600 <i class="fa-solid fa-arrow-right"></i></h4>
+            <p>Tecnologia e Quebrada (curado, sincronizado)</p>
+          </div>
+        </div>
+
+        <div style="width: 100%; max-width: 800px; margin-top: 32px;">
+          <span class="section-title" style="padding-left: 0; display: block; margin-bottom: 12px; text-align: left;">Ou Transcreva seu Próprio Áudio</span>
+          <div class="upload-dropzone" id="audio-dropzone" onclick="triggerFileInput()">
+            <i class="fa-solid fa-cloud-arrow-up"></i>
+            <p>Arraste e solte o arquivo de áudio do episódio aqui</p>
+            <span>Formatos aceitos: MP3, WAV, M4A (Máx. 50MB)</span>
+            <input type="file" id="audio-file-input" style="display: none;" accept="audio/*" onchange="handleAudioUpload(event)">
+          </div>
+        </div>
+      </section>
+
+      <!-- LOADER / PROGRESS VIEW -->
+      <section class="transcription-loader-card animated-fade-in" id="loader-view" style="display: none;">
+        <div class="loader-wave">
+          <div class="loader-wave-bar"></div>
+          <div class="loader-wave-bar"></div>
+          <div class="loader-wave-bar"></div>
+          <div class="loader-wave-bar"></div>
+          <div class="loader-wave-bar"></div>
+          <div class="loader-wave-bar"></div>
+        </div>
+        <div class="loader-text" id="loader-status-title">Processando Áudio...</div>
+        <div class="loader-subtext" id="loader-status-desc">Extraindo marcadores de tempo e locutores. Isso pode levar alguns instantes.</div>
+        <div class="progress-bar-container">
+          <div class="progress-bar-fill" id="loader-progress-bar-fill"></div>
+        </div>
+        <div class="loader-subtext" id="loader-percentage">0% concluído</div>
+      </section>
+
+      <!-- ACTIVE TRANSCRIPTION VIEW -->
+      <section class="animated-fade-in" id="active-workspace-view" style="display: none; flex-direction: column; gap: 24px; height: 100%;">
+        
+        <!-- Workspace Header -->
+        <div class="workspace-header">
+          <img src="" alt="Capa do Episódio" class="episode-cover-large" id="ws-episode-cover">
+          <div class="workspace-metadata">
+            <span class="meta-show-badge" id="ws-show-name">Podcast</span>
+            <h1 class="episode-title-large" id="ws-episode-title">Título do Episódio</h1>
+            <div class="meta-row">
+              <span id="ws-date-added"><i class="fa-regular fa-calendar"></i> --/--/----</span>
+              <span id="ws-duration"><i class="fa-regular fa-clock"></i> --:--</span>
+              <a href="#" target="_blank" class="spotify-episode-link" id="ws-spotify-link">
+                <i class="fa-brands fa-spotify"></i> Abrir no Spotify <i class="fa-solid fa-arrow-up-right-from-square" style="font-size: 0.7rem;"></i>
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Operations & Filters -->
+        <div class="workspace-operations">
+          <div class="transcript-search-wrapper">
+            <i class="fa-solid fa-magnifying-glass"></i>
+            <input type="text" id="transcript-search-input" class="transcript-search-input" placeholder="Buscar no texto..." oninput="handleSearch(event)">
+            <div class="search-nav-buttons" id="search-nav-controls">
+              <button class="btn-search-nav" onclick="navigateSearch(-1)" title="Anterior"><i class="fa-solid fa-chevron-up"></i></button>
+              <button class="btn-search-nav" onclick="navigateSearch(1)" title="Próximo"><i class="fa-solid fa-chevron-down"></i></button>
+            </div>
+          </div>
+
+          <div class="workspace-actions">
+            <button class="btn-action-text" id="btn-edit-mode" onclick="toggleEditMode()">
+              <i class="fa-solid fa-pen-to-square"></i> Modo Edição
+            </button>
+            <button class="btn-action-text" id="btn-export-txt" onclick="exportTranscript('txt')" title="Exportar como TXT">
+              <i class="fa-solid fa-file-lines"></i> TXT
+            </button>
+            <button class="btn-action-text" id="btn-copy-transcript" onclick="copyTranscriptToClipboard()" title="Copiar toda a transcrição">
+              <i class="fa-solid fa-copy"></i> Copiar Texto
+            </button>
+            <button class="btn-action-text" id="btn-download-audio" onclick="downloadEpisodeAudio()" title="Baixar Áudio MP3">
+              <i class="fa-solid fa-download"></i> Baixar Áudio
+            </button>
+          </div>
+        </div>
+
+        <!-- Transcript Main Window -->
+        <div class="transcript-viewer-container" id="transcript-container">
+          <!-- Timed transcript blocks generated dynamically here -->
+        </div>
+
+      </section>
+
+    </main>
+
+    <!-- AI Insights Sidebar (Right) -->
+    <aside class="app-insights" id="app-insights-sidebar">
+      
+      <!-- AI Summary -->
+      <div class="insights-card">
+        <h3 class="insights-card-title"><i class="fa-solid fa-wand-magic-sparkles"></i> Resumo da IA</h3>
+        <p class="summary-text" id="insights-summary">Selecione ou transcreva um episódio para obter uma visão geral gerada automaticamente por IA.</p>
+      </div>
+
+      <!-- Key Takeaways -->
+      <div class="insights-card">
+        <h3 class="insights-card-title"><i class="fa-solid fa-lightbulb"></i> Pontos-Chave</h3>
+        <ul class="takeaways-list" id="insights-takeaways">
+          <li>As lições mais importantes debatidas no episódio aparecerão aqui.</li>
+        </ul>
+      </div>
+
+      <!-- Action Items -->
+      <div class="insights-card">
+        <h3 class="insights-card-title"><i class="fa-solid fa-circle-check"></i> Lições Práticas</h3>
+        <ul class="action-list" id="insights-actions">
+          <li>Ideias e ações sugeridas a partir do conteúdo.</li>
+        </ul>
+      </div>
+
+      <!-- Topics / Tags -->
+      <div class="insights-card">
+        <h3 class="insights-card-title"><i class="fa-solid fa-tags"></i> Temas Abordados</h3>
+        <div class="tags-container" id="insights-topics">
+          <span class="tag-badge">Sem categorias</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Bottom Audio Player Footer -->
+    <footer class="app-player" id="app-audio-player">
+      
+      <div class="player-left">
+        <img src="https://images.unsplash.com/photo-1614680376593-902f74fa0d41?q=80&w=100&h=100&fit=crop" alt="Capa" class="player-cover" id="player-track-cover">
+        <div class="player-text">
+          <span class="player-title" id="player-track-title">Selecione um Episódio</span>
+          <span class="player-show" id="player-track-show">Pronto para transcrever</span>
+        </div>
+      </div>
+
+      <div class="player-controls-container">
+        <div class="playback-controls">
+          <button class="btn-play-control" onclick="skipAudio(-10)" title="Voltar 10s"><i class="fa-solid fa-rotate-left"></i></button>
+          <button class="btn-play-control btn-main-play" id="btn-player-play" onclick="togglePlay()" title="Tocar / Pausar"><i class="fa-solid fa-play"></i></button>
+          <button class="btn-play-control" onclick="skipAudio(10)" title="Avançar 10s"><i class="fa-solid fa-rotate-right"></i></button>
+        </div>
+
+        <div class="progress-timeline">
+          <span class="time-label" id="player-time-current">00:00</span>
+          <div class="timeline-slider-wrapper" id="player-slider" onclick="seekAudio(event)">
+            <div class="timeline-progress-bar" id="player-progress-bar"></div>
+            <div class="timeline-handle" id="player-slider-handle"></div>
+          </div>
+          <span class="time-label" id="player-time-total">00:00</span>
+        </div>
+      </div>
+
+      <div class="player-right">
+        <div class="speed-selector-wrapper">
+          <span class="speed-badge" id="btn-playback-speed" onclick="changePlaybackSpeed()">1.0x</span>
+        </div>
+        <div class="volume-wrapper">
+          <i class="fa-solid fa-volume-high" id="volume-icon" style="color: var(--text-secondary); cursor: pointer;" onclick="toggleMute()"></i>
+          <input type="range" class="volume-slider" id="player-volume" min="0" max="1" step="0.05" value="0.8" oninput="setVolume(this.value)">
+        </div>
+      </div>
+    </footer>
+
+  </div>
+
+  <!-- Settings Modal (API Keys & Configs) -->
+  <div class="modal" id="settings-modal" onclick="closeModalOnOuterClick(event)">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">Configurações de Transcrição</h3>
+        <button class="btn-close-modal" onclick="toggleSettingsModal(false)"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      
+      <div class="form-group">
+        <label class="form-label" for="api-backend-url">URL do Servidor Backend</label>
+        <input type="text" id="api-backend-url" class="form-input" placeholder="http://localhost:3000">
+        <span class="form-note">Endereço do seu servidor de transcrição (Node.js). Padrão local: http://localhost:3000.</span>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="transcription-language">Idioma Padrão</label>
+        <select id="transcription-language" class="form-input">
+          <option value="pt-BR">Português (Brasil)</option>
+          <option value="en-US">Inglês (Estados Unidos)</option>
+          <option value="es-ES">Espanhol (Espanha)</option>
+        </select>
+      </div>
+      <button class="btn-primary" style="margin-top: 10px; width: 100%; justify-content: center;" onclick="saveSettings()">
+        Salvar Configurações
+      </button>
+    </div>
+  </div>
+
+  <!-- Hidden Web Audio Element -->
+  <audio id="main-audio-element" style="display: none;" ontimeupdate="onAudioTimeUpdate()" onended="onAudioEnded()" onloadedmetadata="onAudioMetadataLoaded()"></audio>
+
+  <!-- Load Scripts -->
+  <script src="mock-data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
