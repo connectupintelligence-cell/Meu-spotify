@@ -508,7 +508,7 @@ function filterByTopic(topic) {
 }
 
 // Process Spotify URL Pasted
-function processSpotifyLink() {
+function processSpotifyLink(action = "transcribe") {
   try {
     const url = spotifyUrlInput.value.trim();
     
@@ -539,9 +539,14 @@ function processSpotifyLink() {
     }
     
     if (mockMatch) {
-      showLoader("Buscando dados no Spotify...", "Localizando metadados do episódio e carregando transcrição estruturada.", () => {
+      showLoader("Buscando dados no Spotify...", "Localizando metadados do episódio.", () => {
         try {
           loadMockEpisode(mockMatch);
+          if (action === "download") {
+            setTimeout(() => {
+              downloadEpisodeAudio();
+            }, 600);
+          }
         } catch (e) {
           alert("Erro ao carregar dados do mock: " + e.message);
         }
@@ -549,15 +554,18 @@ function processSpotifyLink() {
       return;
     }
 
-    // Envia a requisição para o nosso backend Express para fazer a transcrição real via feed RSS
-    showLoader("Conectando ao Backend...", "O servidor está localizando o feed RSS e processando a transcrição real do áudio via IA...", async () => {
+    // Envia a requisição para o nosso backend Express
+    const loaderTitle = action === "download" ? "Resolvendo Link do Áudio..." : "Conectando ao Backend...";
+    const loaderDesc = action === "download" ? "O servidor está localizando o feed RSS e o arquivo de áudio para download..." : "O servidor está localizando o feed RSS e processando a transcrição real do áudio via IA...";
+
+    showLoader(loaderTitle, loaderDesc, async () => {
       try {
         const response = await fetch(`${backendUrl}/api/transcribe`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json"
           },
-          body: JSON.stringify({ url: url, language: defaultLanguage })
+          body: JSON.stringify({ url: url, language: defaultLanguage, action: action })
         });
         
         if (!response.ok) {
@@ -569,9 +577,16 @@ function processSpotifyLink() {
         
         // Carrega o episódio real retornado do backend
         loadEpisodeData(data);
+
+        // Se a ação for download, inicia o download imediatamente após carregar os dados
+        if (action === "download") {
+          setTimeout(() => {
+            downloadEpisodeAudio();
+          }, 600);
+        }
       } catch (e) {
-        console.error("Erro ao chamar o backend de transcrição:", e);
-        alert("Não foi possível transcrever usando o backend: " + e.message + 
+        console.error("Erro ao chamar o backend:", e);
+        alert("Não foi possível processar usando o backend: " + e.message + 
               "\n\nCertifique-se de que o seu servidor backend está rodando em '" + backendUrl + "' ou ajuste o endereço nas Configurações (ícone de engrenagem no topo).");
       }
     });
