@@ -26,7 +26,7 @@ app.get("/health", (req, res) => {
  */
 app.post("/api/transcribe", async (req, res) => {
   try {
-    const { url, language } = req.body;
+    const { url, language, action } = req.body;
 
     if (!url) {
       return res.status(400).json({ error: "A URL do Spotify é obrigatória." });
@@ -176,13 +176,19 @@ app.post("/api/transcribe", async (req, res) => {
       mp3Url = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3";
     }
 
-    // 4. Executar a Transcrição Real
+    // 4. Executar a Transcrição Real (apenas se action !== "download")
     let transcript = [];
     let transcriptionEngine = "simulated";
 
-    const deepgramKey = process.env.DEEPGRAM_API_KEY;
+    if (action === "download") {
+      transcriptionEngine = "skipped";
+      transcript = [
+        { start: 0, speaker: "Sistema", text: "Transcrição não solicitada. O áudio do episódio foi carregado com sucesso para audição ou download direto." }
+      ];
+    } else {
+      const deepgramKey = process.env.DEEPGRAM_API_KEY;
 
-    if (deepgramKey && resolvedFromRss) {
+      if (deepgramKey && resolvedFromRss) {
       // Caso tenhamos a chave da Deepgram e o link do MP3 real do podcast
       try {
         const targetLanguage = language || "pt-BR";
@@ -248,6 +254,7 @@ app.post("/api/transcribe", async (req, res) => {
         console.error("[Deepgram] Erro ao transcrever com a API:", dgErr.message);
       }
     }
+  }
 
     // Fallback de Transcrição se não houver Deepgram ou se a transcrição falhou
     if (transcript.length === 0) {
