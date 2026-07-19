@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
 const xml2js = require("xml2js");
+const ytdl = require("@distube/ytdl-core");
 require("dotenv").config();
 
 const app = express();
@@ -143,29 +144,54 @@ app.post("/api/transcribe", async (req, res) => {
         artistName = parts[1].trim();
       }
 
-      // Buscar áudio de prévia da música via iTunes Search API (entity=song)
-      try {
-        console.log(`[iTunes Song] Buscando faixa: "${artistName} ${trackName}"`);
-        const songSearchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent((artistName + ' ' + trackName).trim())}&entity=song&limit=1`;
-        const songRes = await axios.get(songSearchUrl);
-
-        if (songRes.data.results && songRes.data.results.length > 0) {
-          const songInfo = songRes.data.results[0];
-          if (songInfo.previewUrl) {
-            mp3Url = songInfo.previewUrl;
-            resolvedFromRss = true;
+      if (isYouTube) {
+        try {
+          console.log(`[ytdl] Tentando extrair fluxo de áudio direto do YouTube para URL: ${url}`);
+          if (ytdl.validateURL(url)) {
+            const info = await ytdl.getInfo(url);
+            const format = ytdl.chooseFormat(info.formats, { filter: "audioonly", quality: "highestaudio" });
+            if (format && format.url) {
+              mp3Url = format.url;
+              resolvedFromRss = true;
+              console.log(`[ytdl] Sucesso! Áudio completo do YouTube extraído.`);
+              if (info.videoDetails && info.videoDetails.lengthSeconds) {
+                durationSeconds = parseInt(info.videoDetails.lengthSeconds, 10);
+                const mins = Math.floor(durationSeconds / 60);
+                const secs = durationSeconds % 60;
+                duration = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+              }
+            }
           }
-          if (songInfo.trackName) realTitle = songInfo.trackName;
-          if (songInfo.artistName) realShow = songInfo.artistName;
-          if (songInfo.trackTimeMillis) {
-            durationSeconds = Math.round(songInfo.trackTimeMillis / 1000);
-            const mins = Math.floor(durationSeconds / 60);
-            const secs = durationSeconds % 60;
-            duration = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-          }
+        } catch (ytdlErr) {
+          console.warn("[ytdl] Falha ao extrair áudio via ytdl:", ytdlErr.message);
         }
-      } catch (songErr) {
-        console.warn("[iTunes Song] Falha ao consultar API de música:", songErr.message);
+      }
+
+      // Buscar áudio de prévia da música via iTunes Search API (entity=song) se mp3Url ainda for nulo
+      if (!mp3Url) {
+        try {
+          console.log(`[iTunes Song] Buscando faixa: "${artistName} ${trackName}"`);
+          const songSearchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent((artistName + ' ' + trackName).trim())}&entity=song&limit=1`;
+          const songRes = await axios.get(songSearchUrl);
+
+          if (songRes.data.results && songRes.data.results.length > 0) {
+            const songInfo = songRes.data.results[0];
+            if (songInfo.previewUrl) {
+              mp3Url = songInfo.previewUrl;
+              resolvedFromRss = true;
+            }
+            if (songInfo.trackName) realTitle = songInfo.trackName;
+            if (songInfo.artistName) realShow = songInfo.artistName;
+            if (songInfo.trackTimeMillis) {
+              durationSeconds = Math.round(songInfo.trackTimeMillis / 1000);
+              const mins = Math.floor(durationSeconds / 60);
+              const secs = durationSeconds % 60;
+              duration = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+            }
+          }
+        } catch (songErr) {
+          console.warn("[iTunes Song] Falha ao consultar API de música:", songErr.message);
+        }
       }
 
       // Obter a letra oficial da música via lyrics.ovh API
