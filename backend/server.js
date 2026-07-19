@@ -312,6 +312,43 @@ app.post("/api/transcribe", async (req, res) => {
   }
 });
 
+/**
+ * GET /api/download
+ * Proxies the MP3 audio file and forces download in the browser
+ */
+app.get("/api/download", async (req, res) => {
+  try {
+    const { url, title } = req.query;
+
+    if (!url) {
+      return res.status(400).send("URL is required");
+    }
+
+    console.log(`[Proxy Download] Iniciando download para: ${url}`);
+
+    // Fetch the audio stream from the source URL
+    const response = await axios({
+      method: "get",
+      url: url,
+      responseType: "stream",
+      timeout: 30000 // 30 seconds timeout
+    });
+
+    const safeTitle = (title || "audio").replace(/[^a-z0-9]/gi, "_").toLowerCase();
+    
+    // Set headers to force file download
+    res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.mp3"`);
+    res.setHeader("Content-Type", "audio/mpeg");
+
+    // Pipe the response stream directly to the Express response
+    response.data.pipe(res);
+
+  } catch (error) {
+    console.error("[Proxy Download Error] Falha ao baixar áudio:", error.message);
+    res.status(500).send("Erro ao processar o download do áudio.");
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`==================================================`);
   console.log(` Spotify Scribe Backend rodando com sucesso!`);
