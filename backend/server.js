@@ -81,221 +81,306 @@ app.post("/api/transcribe", async (req, res) => {
 
     console.log(`[Metadata] Título: "${realTitle}" | Show: "${realShow}"`);
 
-    // 3. Mapear o podcast para seu feed RSS público via iTunes Search API
+    // 3. Mapear MÚSICA ou PODCAST
     let mp3Url = null;
     let duration = "04:10";
     let durationSeconds = 250;
     let resolvedFromRss = false;
-
-    try {
-      // Termos de busca limpos para o iTunes Search API
-      const cleanShowQuery = realShow
-        .replace(/#\d+/g, "")
-        .replace(/\bep(isódio)?\s*\d+\b/gi, "")
-        .replace(/-\s*com\s+.*$/gi, "")
-        .trim();
-
-      console.log(`[iTunes] Buscando feed RSS para o podcast: "${cleanShowQuery}" (Original: "${realShow}")`);
-      
-      let candidateFeeds = [];
-      let searchTerms = [cleanShowQuery, realShow, realTitle.split(" - ")[0], realTitle.split(" | ")[0]];
-
-      for (const term of searchTerms) {
-        if (!term || term.length < 3 || candidateFeeds.length > 0) continue;
-        const itunesSearchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&entity=podcast&limit=5`;
-        try {
-          const itunesResponse = await axios.get(itunesSearchUrl);
-          if (itunesResponse.data.results && itunesResponse.data.results.length > 0) {
-            candidateFeeds = itunesResponse.data.results.map(r => r.feedUrl).filter(Boolean);
-            console.log(`[iTunes] ${candidateFeeds.length} feeds candidatos encontrados para o termo: "${term}"`);
-          }
-        } catch (e) {
-          console.warn(`[iTunes] Erro ao consultar termo "${term}":`, e.message);
-        }
-      }
-
-      // Percorre os feeds candidatos procurando o episódio correspondente
-      for (const feedUrl of candidateFeeds) {
-        if (mp3Url) break;
-        try {
-          console.log(`[RSS] Analisando feed XML: ${feedUrl}`);
-          const rssResponse = await axios.get(feedUrl, { timeout: 8000 });
-          const parsedRss = await xmlParser.parseStringPromise(rssResponse.data);
-          
-          if (!parsedRss.rss || !parsedRss.rss.channel || !parsedRss.rss.channel.item) continue;
-          
-          const items = parsedRss.rss.channel.item;
-          const itemsArray = Array.isArray(items) ? items : [items];
-
-          let bestMatch = null;
-          let highestScore = 0;
-          const cleanString = (str) => str.toLowerCase().replace(/[^a-z0-9]/g, "");
-          const cleanTitleToMatch = cleanString(realTitle);
-
-          for (const item of itemsArray) {
-            const itemTitle = item.title;
-            if (!itemTitle) continue;
-            const cleanItemTitle = cleanString(itemTitle);
-            
-            let score = 0;
-            if (cleanItemTitle.includes(cleanTitleToMatch) || cleanTitleToMatch.includes(cleanItemTitle)) {
-              score = 100;
-            } else {
-              const words1 = new Set(realTitle.toLowerCase().split(/\s+/).filter(w => w.length > 2));
-              const words2 = new Set(itemTitle.toLowerCase().split(/\s+/).filter(w => w.length > 2));
-              const intersection = new Set([...words1].filter(x => words2.has(x)));
-              score = (intersection.size / Math.max(words1.size, 1)) * 100;
-            }
-
-            if (score > highestScore && score > 25) {
-              highestScore = score;
-              bestMatch = item;
-            }
-          }
-
-          if (bestMatch && bestMatch.enclosure && bestMatch.enclosure.url) {
-            mp3Url = bestMatch.enclosure.url;
-            resolvedFromRss = true;
-            console.log(`[RSS] Sucesso! Episódio correspondente encontrado com score ${highestScore}. Áudio MP3: ${mp3Url}`);
-            
-            if (bestMatch["itunes:duration"]) {
-              const rawDuration = bestMatch["itunes:duration"];
-              duration = rawDuration;
-              if (rawDuration.includes(":")) {
-                const parts = rawDuration.split(":").map(Number);
-                if (parts.length === 3) {
-                  durationSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
-                } else if (parts.length === 2) {
-                  durationSeconds = parts[0] * 60 + parts[1];
-                }
-              } else {
-                durationSeconds = parseInt(rawDuration, 10) || 250;
-                const mins = Math.floor(durationSeconds / 60);
-                const secs = durationSeconds % 60;
-                duration = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-              }
-            }
-          }
-        } catch (feedErr) {
-          console.warn(`[RSS] Falha ao processar feed "${feedUrl}":`, feedErr.message);
-        }
-      }
-
-    } catch (rssErr) {
-      console.error("[RSS Resolver] Falha ao obter ou processar feed RSS:", rssErr.message);
-    }
-
-    if (!mp3Url) {
-      console.log("[Audio] Nenhum MP3 público encontrado no feed RSS do podcast.");
-      mp3Url = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3";
-    }
-
-    // 4. Executar a Transcrição Real (apenas se action !== "download")
     let transcript = [];
     let transcriptionEngine = "simulated";
+    let aiInsights = null;
 
-    if (action === "download") {
-      transcriptionEngine = "skipped";
-      transcript = [
-        { start: 0, speaker: "Sistema", text: "Transcrição não solicitada. O áudio do episódio foi carregado com sucesso para audição ou download direto." }
-      ];
-    } else {
-      const deepgramKey = process.env.DEEPGRAM_API_KEY;
+    const isTrack = url.includes("/track/") || mediaType === "track";
 
-      if (deepgramKey && resolvedFromRss) {
-      // Caso tenhamos a chave da Deepgram e o link do MP3 real do podcast
-      try {
-        const targetLanguage = language || "pt-BR";
-        console.log(`[Deepgram] Iniciando transcrição real (${targetLanguage}) para URL: ${mp3Url}`);
-        
-        const deepgramResponse = await axios.post(
-          `https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&diarize=true&paragraphs=true&punctuate=true&language=${targetLanguage}`,
-          { url: mp3Url },
-          {
-            headers: {
-              "Authorization": `Token ${deepgramKey}`,
-              "Content-Type": "application/json"
-            },
-            timeout: 60000 // 60 segundos de timeout para áudios longos
-          }
-        );
+    if (isTrack) {
+      console.log(`[Music Engine] Processando faixa de música: "${realTitle}"`);
+      
+      let artistName = realShow !== "Spotify Creator" ? realShow : "";
+      let trackName = realTitle;
 
-        const alternatives = deepgramResponse.data.results.channels[0].alternatives[0];
-        
-        if (alternatives.paragraphs && alternatives.paragraphs.paragraphs) {
-          const paragraphs = alternatives.paragraphs.paragraphs;
-          transcript = paragraphs.flatMap(para => {
-            return para.sentences.map(sent => ({
-              start: Math.round(sent.start),
-              speaker: `Orador ${para.speaker + 1}`,
-              text: sent.text.trim()
-            }));
-          });
-          transcriptionEngine = "deepgram";
-          console.log(`[Deepgram] Transcrição concluída! ${transcript.length} frases geradas.`);
-        } else if (alternatives.words && alternatives.words.length > 0) {
-          // Fallback se não tiver parágrafos estruturados (agrupa palavras por orador em janelas de 6 segundos)
-          const words = alternatives.words;
-          let currentSpeaker = words[0].speaker;
-          let currentText = [];
-          let startTime = words[0].start;
-
-          for (const word of words) {
-            if (word.speaker !== currentSpeaker || currentText.length > 15) {
-              transcript.push({
-                start: Math.round(startTime),
-                speaker: `Orador ${currentSpeaker + 1}`,
-                text: currentText.join(" ")
-              });
-              currentSpeaker = word.speaker;
-              currentText = [word.punctuated_word || word.word];
-              startTime = word.start;
-            } else {
-              currentText.push(word.punctuated_word || word.word);
-            }
-          }
-          if (currentText.length > 0) {
-            transcript.push({
-              start: Math.round(startTime),
-              speaker: `Orador ${currentSpeaker + 1}`,
-              text: currentText.join(" ")
-            });
-          }
-          transcriptionEngine = "deepgram";
-          console.log(`[Deepgram] Transcrição (via palavras) concluída! ${transcript.length} frases geradas.`);
-        }
-      } catch (dgErr) {
-        console.error("[Deepgram] Erro ao transcrever com a API:", dgErr.message);
+      if (realTitle.includes(" by ")) {
+        const parts = realTitle.split(" by ");
+        trackName = parts[0].trim();
+        artistName = parts[1].trim();
+      } else if (realTitle.includes(" - ")) {
+        const parts = realTitle.split(" - ");
+        trackName = parts[0].trim();
+        artistName = parts[1].trim();
       }
-    }
-  }
 
-    // Fallback de Transcrição se não houver Deepgram ou se a transcrição falhou
-    if (transcript.length === 0) {
-      console.log("[Fallback] Carregando transcrição genérica estática.");
-      transcript = [
-        { start: 0, speaker: "Locutor A", text: `Olá! Carregamos com sucesso o link do episódio "${realTitle}".` },
-        { start: 10, speaker: "Locutor A", text: `Este conteúdo é apresentado por "${realShow}".` },
-        { start: 20, speaker: "Locutor B", text: "Para realizar transcrições reais de áudio, certifique-se de configurar a API key da Deepgram (DEEPGRAM_API_KEY) no arquivo .env do seu servidor backend." },
-        { start: 35, speaker: "Locutor B", text: "O player sincronizado permite clicar em qualquer frase para pular o áudio para o tempo correspondente." },
-        { start: 48, speaker: "Locutor A", text: "Você também pode exportar o resultado como legenda SRT ou arquivo de texto TXT." }
-      ];
-    }
+      // Buscar áudio de prévia da música via iTunes Search API (entity=song)
+      try {
+        console.log(`[iTunes Song] Buscando faixa: "${artistName} ${trackName}"`);
+        const songSearchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent((artistName + ' ' + trackName).trim())}&entity=song&limit=1`;
+        const songRes = await axios.get(songSearchUrl);
 
-    // 5. Insights estáticos (geração de resumo dinâmico via OpenAI removida)
-    let aiInsights = {
-      summary: `Resumo do episódio '${realTitle}' de '${realShow}'. (Geração de resumo automático desativada no momento).`,
-      keyTakeaways: [
-        "Metadados e detalhes do episódio carregados de forma automatizada.",
-        "Link de reprodução de áudio original obtido via feed RSS.",
-        "A extração de insights por inteligência artificial está temporariamente desativada."
-      ],
-      actionItems: [
-        "Acompanhar o canal original para novos lançamentos.",
-        "Baixar o arquivo TXT ou SRT da transcrição no topo da página."
-      ],
-      topics: ["Podcast", realShow || "Spotify"]
-    };
+        if (songRes.data.results && songRes.data.results.length > 0) {
+          const songInfo = songRes.data.results[0];
+          if (songInfo.previewUrl) {
+            mp3Url = songInfo.previewUrl;
+            resolvedFromRss = true;
+          }
+          if (songInfo.trackName) realTitle = songInfo.trackName;
+          if (songInfo.artistName) realShow = songInfo.artistName;
+          if (songInfo.trackTimeMillis) {
+            durationSeconds = Math.round(songInfo.trackTimeMillis / 1000);
+            const mins = Math.floor(durationSeconds / 60);
+            const secs = durationSeconds % 60;
+            duration = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+          }
+        }
+      } catch (songErr) {
+        console.warn("[iTunes Song] Falha ao consultar API de música:", songErr.message);
+      }
+
+      // Obter a letra oficial da música via lyrics.ovh API
+      try {
+        console.log(`[Lyrics API] Buscando letra para: Artista="${realShow}", Música="${realTitle}"`);
+        const lyricsUrl = `https://api.lyrics.ovh/v1/${encodeURIComponent(realShow)}/${encodeURIComponent(realTitle)}`;
+        const lyricsRes = await axios.get(lyricsUrl, { timeout: 7000 });
+
+        if (lyricsRes.data && lyricsRes.data.lyrics) {
+          const rawLyrics = lyricsRes.data.lyrics.trim();
+          const lines = rawLyrics.split("\n").filter(l => l.trim().length > 0);
+          
+          const timeStep = Math.max(2, Math.floor((durationSeconds || 180) / Math.max(lines.length, 1)));
+          transcript = lines.map((lineText, index) => ({
+            start: index * timeStep,
+            speaker: realShow,
+            text: lineText.trim()
+          }));
+          transcriptionEngine = "official-lyrics";
+          console.log(`[Lyrics API] Letra obtida com sucesso! ${transcript.length} linhas.`);
+        }
+      } catch (lErr) {
+        console.warn("[Lyrics API] Letra não localizada ou indisponível:", lErr.message);
+      }
+
+      if (transcript.length === 0) {
+        transcript = [
+          { start: 0, speaker: realShow, text: `Música: ${realTitle} - ${realShow}` },
+          { start: 5, speaker: "Sistema", text: "Áudio da faixa de música carregado com sucesso." },
+          { start: 12, speaker: "Sistema", text: "A letra desta música não foi localizada na base de dados de letras." }
+        ];
+      }
+
+      aiInsights = {
+        summary: `Faixa de música '${realTitle}' do artista '${realShow}'.`,
+        keyTakeaways: [
+          "Áudio da música localizado via busca oficial.",
+          "Letra estruturada e sincronizada com o player de áudio."
+        ],
+        actionItems: [
+          "Ouvir a faixa no player inferior.",
+          "Baixar o arquivo de áudio ou copiar a letra usando a barra de ferramentas."
+        ],
+        topics: ["Música", realShow || "Pop"]
+      };
+
+    } else {
+
+      // PODCAST RESOLUTION (RSS Feed Search)
+      try {
+        const cleanShowQuery = realShow
+          .replace(/#\d+/g, "")
+          .replace(/\bep(isódio)?\s*\d+\b/gi, "")
+          .replace(/-\s*com\s+.*$/gi, "")
+          .trim();
+
+        console.log(`[iTunes] Buscando feed RSS para o podcast: "${cleanShowQuery}" (Original: "${realShow}")`);
+        
+        let candidateFeeds = [];
+        let searchTerms = [cleanShowQuery, realShow, realTitle.split(" - ")[0], realTitle.split(" | ")[0]];
+
+        for (const term of searchTerms) {
+          if (!term || term.length < 3 || candidateFeeds.length > 0) continue;
+          const itunesSearchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&entity=podcast&limit=5`;
+          try {
+            const itunesResponse = await axios.get(itunesSearchUrl);
+            if (itunesResponse.data.results && itunesResponse.data.results.length > 0) {
+              candidateFeeds = itunesResponse.data.results.map(r => r.feedUrl).filter(Boolean);
+              console.log(`[iTunes] ${candidateFeeds.length} feeds candidatos encontrados para o termo: "${term}"`);
+            }
+          } catch (e) {
+            console.warn(`[iTunes] Erro ao consultar termo "${term}":`, e.message);
+          }
+        }
+
+        for (const feedUrl of candidateFeeds) {
+          if (mp3Url) break;
+          try {
+            console.log(`[RSS] Analisando feed XML: ${feedUrl}`);
+            const rssResponse = await axios.get(feedUrl, { timeout: 8000 });
+            const parsedRss = await xmlParser.parseStringPromise(rssResponse.data);
+            
+            if (!parsedRss.rss || !parsedRss.rss.channel || !parsedRss.rss.channel.item) continue;
+            
+            const items = parsedRss.rss.channel.item;
+            const itemsArray = Array.isArray(items) ? items : [items];
+
+            let bestMatch = null;
+            let highestScore = 0;
+            const cleanString = (str) => str.toLowerCase().replace(/[^a-z0-9]/g, "");
+            const cleanTitleToMatch = cleanString(realTitle);
+
+            for (const item of itemsArray) {
+              const itemTitle = item.title;
+              if (!itemTitle) continue;
+              const cleanItemTitle = cleanString(itemTitle);
+              
+              let score = 0;
+              if (cleanItemTitle.includes(cleanTitleToMatch) || cleanTitleToMatch.includes(cleanItemTitle)) {
+                score = 100;
+              } else {
+                const words1 = new Set(realTitle.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+                const words2 = new Set(itemTitle.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+                const intersection = new Set([...words1].filter(x => words2.has(x)));
+                score = (intersection.size / Math.max(words1.size, 1)) * 100;
+              }
+
+              if (score > highestScore && score > 25) {
+                highestScore = score;
+                bestMatch = item;
+              }
+            }
+
+            if (bestMatch && bestMatch.enclosure && bestMatch.enclosure.url) {
+              mp3Url = bestMatch.enclosure.url;
+              resolvedFromRss = true;
+              console.log(`[RSS] Sucesso! Episódio correspondente encontrado com score ${highestScore}. Áudio MP3: ${mp3Url}`);
+              
+              if (bestMatch["itunes:duration"]) {
+                const rawDuration = bestMatch["itunes:duration"];
+                duration = rawDuration;
+                if (rawDuration.includes(":")) {
+                  const parts = rawDuration.split(":").map(Number);
+                  if (parts.length === 3) {
+                    durationSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+                  } else if (parts.length === 2) {
+                    durationSeconds = parts[0] * 60 + parts[1];
+                  }
+                } else {
+                  durationSeconds = parseInt(rawDuration, 10) || 250;
+                  const mins = Math.floor(durationSeconds / 60);
+                  const secs = durationSeconds % 60;
+                  duration = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+                }
+              }
+            }
+          } catch (feedErr) {
+            console.warn(`[RSS] Falha ao processar feed "${feedUrl}":`, feedErr.message);
+          }
+        }
+
+      } catch (rssErr) {
+        console.error("[RSS Resolver] Falha ao obter ou processar feed RSS:", rssErr.message);
+      }
+
+      if (!mp3Url) {
+        console.log("[Audio] Nenhum MP3 público encontrado no feed RSS do podcast.");
+        mp3Url = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3";
+      }
+
+      if (action === "download") {
+        transcriptionEngine = "skipped";
+        transcript = [
+          { start: 0, speaker: "Sistema", text: "Transcrição não solicitada. O áudio do episódio foi carregado com sucesso para audição ou download direto." }
+        ];
+      } else {
+        const deepgramKey = process.env.DEEPGRAM_API_KEY;
+
+        if (deepgramKey && resolvedFromRss) {
+          try {
+            const targetLanguage = language || "pt-BR";
+            console.log(`[Deepgram] Iniciando transcrição real (${targetLanguage}) para URL: ${mp3Url}`);
+            
+            const deepgramResponse = await axios.post(
+              `https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&diarize=true&paragraphs=true&punctuate=true&language=${targetLanguage}`,
+              { url: mp3Url },
+              {
+                headers: {
+                  "Authorization": `Token ${deepgramKey}`,
+                  "Content-Type": "application/json"
+                },
+                timeout: 60000
+              }
+            );
+
+            const alternatives = deepgramResponse.data.results.channels[0].alternatives[0];
+            
+            if (alternatives.paragraphs && alternatives.paragraphs.paragraphs) {
+              const paragraphs = alternatives.paragraphs.paragraphs;
+              transcript = paragraphs.flatMap(para => {
+                return para.sentences.map(sent => ({
+                  start: Math.round(sent.start),
+                  speaker: `Orador ${para.speaker + 1}`,
+                  text: sent.text.trim()
+                }));
+              });
+              transcriptionEngine = "deepgram";
+              console.log(`[Deepgram] Transcrição concluída! ${transcript.length} frases geradas.`);
+            } else if (alternatives.words && alternatives.words.length > 0) {
+              const words = alternatives.words;
+              let currentSpeaker = words[0].speaker;
+              let currentText = [];
+              let startTime = words[0].start;
+
+              for (const word of words) {
+                if (word.speaker !== currentSpeaker || currentText.length > 15) {
+                  transcript.push({
+                    start: Math.round(startTime),
+                    speaker: `Orador ${currentSpeaker + 1}`,
+                    text: currentText.join(" ")
+                  });
+                  currentSpeaker = word.speaker;
+                  currentText = [word.punctuated_word || word.word];
+                  startTime = word.start;
+                } else {
+                  currentText.push(word.punctuated_word || word.word);
+                }
+              }
+              if (currentText.length > 0) {
+                transcript.push({
+                  start: Math.round(startTime),
+                  speaker: `Orador ${currentSpeaker + 1}`,
+                  text: currentText.join(" ")
+                });
+              }
+              transcriptionEngine = "deepgram";
+              console.log(`[Deepgram] Transcrição (via palavras) concluída! ${transcript.length} frases geradas.`);
+            }
+          } catch (dgErr) {
+            console.error("[Deepgram] Erro ao transcrever com a API:", dgErr.message);
+          }
+        }
+      }
+
+      if (transcript.length === 0) {
+        console.log("[Fallback] Carregando transcrição genérica estática.");
+        transcript = [
+          { start: 0, speaker: "Locutor A", text: `Olá! Carregamos com sucesso o link do episódio "${realTitle}".` },
+          { start: 10, speaker: "Locutor A", text: `Este conteúdo é apresentado por "${realShow}".` },
+          { start: 20, speaker: "Locutor B", text: "Para realizar transcrições reais de áudio, certifique-se de configurar a API key da Deepgram (DEEPGRAM_API_KEY) no arquivo .env do seu servidor backend." },
+          { start: 35, speaker: "Locutor B", text: "O player sincronizado permite clicar em qualquer frase para pular o áudio para o tempo correspondente." },
+          { start: 48, speaker: "Locutor A", text: "Você também pode exportar o resultado como legenda SRT ou arquivo de texto TXT." }
+        ];
+      }
+
+      aiInsights = {
+        summary: `Resumo do episódio '${realTitle}' de '${realShow}'. (Geração de resumo automático desativada no momento).`,
+        keyTakeaways: [
+          "Metadados e detalhes do episódio carregados de forma automatizada.",
+          "Link de reprodução de áudio original obtido via feed RSS.",
+          "A extração de insights por inteligência artificial está temporariamente desativada."
+        ],
+        actionItems: [
+          "Acompanhar o canal original para novos lançamentos.",
+          "Baixar o arquivo TXT ou SRT da transcrição no topo da página."
+        ],
+        topics: ["Podcast", realShow || "Spotify"]
+      };
+
+    }
 
     // 6. Retornar resposta completa montada
     const responsePayload = {
