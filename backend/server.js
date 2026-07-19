@@ -41,9 +41,11 @@ app.post("/api/transcribe", async (req, res) => {
     try {
       const parsedUrl = new URL(url);
       const pathParts = parsedUrl.pathname.split("/").filter(Boolean);
-      if (pathParts.length >= 2) {
-        mediaType = pathParts[0]; // e.g. "episode", "show", "track"
-        episodeId = pathParts[1]; // e.g. "3Ur84Kfs82Jh98saHD8D"
+      // Remove o prefixo de localização internacional se existir (ex: intl-pt, intl-es)
+      const cleanParts = pathParts.filter(p => !p.startsWith("intl-"));
+      if (cleanParts.length >= 2) {
+        mediaType = cleanParts[0]; // e.g. "episode", "show", "track"
+        episodeId = cleanParts[1]; // e.g. "1XGmzt0PVuFgQYYnV2It7A"
       }
     } catch (e) {
       console.warn("[URL Parser] Não foi possível parsear a URL para extrair tipo/ID:", e.message);
