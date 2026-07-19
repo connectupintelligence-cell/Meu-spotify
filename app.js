@@ -962,13 +962,13 @@ function downloadEpisodeAudio() {
     alert("Atenção: Este é o áudio genérico de demonstração. O feed RSS deste podcast não pôde ser resolvido para o download do arquivo original.");
   }
 
-  const link = document.createElement("a");
-  link.href = currentEpisode.audioUrl;
-  link.target = "_blank";
-  
-  const filename = `${currentEpisode.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.mp3`;
-  link.download = filename;
+  // Utiliza a rota de proxy de download do backend para forçar o download direto
+  const downloadUrl = `${backendUrl}/api/download?url=${encodeURIComponent(currentEpisode.audioUrl)}&title=${encodeURIComponent(currentEpisode.title)}`;
 
+  const link = document.createElement("a");
+  link.href = downloadUrl;
+  link.target = "_blank"; // Abre em nova aba temporária para forçar o download direto do backend
+  
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
