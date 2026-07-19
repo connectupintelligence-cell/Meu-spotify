@@ -957,9 +957,10 @@ function downloadEpisodeAudio() {
     return;
   }
 
-  // Se for o áudio genérico de demonstração
+  // Se for o áudio genérico de demonstração / não localizado no RSS
   if (currentEpisode.audioUrl.includes("soundhelix.com")) {
-    alert("Atenção: Este é o áudio genérico de demonstração. O feed RSS deste podcast não pôde ser resolvido para o download do arquivo original.");
+    alert("Atenção: Este episódio não possui um feed RSS público de MP3 disponível. Podcasts exclusivos do Spotify utilizam criptografia DRM e não fornecem links de download direto.");
+    return;
   }
 
   // Utiliza a rota de proxy de download do backend para forçar o download direto

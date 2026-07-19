@@ -88,91 +88,105 @@ app.post("/api/transcribe", async (req, res) => {
     let resolvedFromRss = false;
 
     try {
-      console.log(`[iTunes] Buscando feed RSS para o podcast: "${realShow}"`);
-      const itunesSearchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(realShow)}&entity=podcast&limit=1`;
-      const itunesResponse = await axios.get(itunesSearchUrl);
+      // Termos de busca limpos para o iTunes Search API
+      const cleanShowQuery = realShow
+        .replace(/#\d+/g, "")
+        .replace(/\bep(isódio)?\s*\d+\b/gi, "")
+        .replace(/-\s*com\s+.*$/gi, "")
+        .trim();
+
+      console.log(`[iTunes] Buscando feed RSS para o podcast: "${cleanShowQuery}" (Original: "${realShow}")`);
       
-      if (itunesResponse.data.results && itunesResponse.data.results.length > 0) {
-        const feedUrl = itunesResponse.data.results[0].feedUrl;
-        console.log(`[iTunes] Feed RSS localizado: ${feedUrl}`);
+      let candidateFeeds = [];
+      let searchTerms = [cleanShowQuery, realShow, realTitle.split(" - ")[0], realTitle.split(" | ")[0]];
 
-        // Baixar e processar o feed XML do podcast
-        const rssResponse = await axios.get(feedUrl, { timeout: 8000 });
-        const parsedRss = await xmlParser.parseStringPromise(rssResponse.data);
-        
-        const items = parsedRss.rss.channel.item;
-        const itemsArray = Array.isArray(items) ? items : [items];
-
-        console.log(`[RSS] Analisando ${itemsArray.length} episódios do feed RSS...`);
-
-        // Fuzzy match: Procura pelo episódio no feed RSS cujo título seja mais parecido
-        let bestMatch = null;
-        let highestScore = 0;
-
-        const cleanString = (str) => str.toLowerCase().replace(/[^a-z0-9]/g, "");
-        const cleanTitleToMatch = cleanString(realTitle);
-
-        for (const item of itemsArray) {
-          const itemTitle = item.title;
-          if (!itemTitle) continue;
-
-          const cleanItemTitle = cleanString(itemTitle);
-          
-          // Verifica se um contém o outro (caso mais simples de match)
-          let score = 0;
-          if (cleanItemTitle.includes(cleanTitleToMatch) || cleanTitleToMatch.includes(cleanItemTitle)) {
-            score = 100;
-          } else {
-            // Conta quantas palavras em comum existem
-            const words1 = new Set(realTitle.toLowerCase().split(/\s+/));
-            const words2 = new Set(itemTitle.toLowerCase().split(/\s+/));
-            const intersection = new Set([...words1].filter(x => words2.has(x)));
-            score = (intersection.size / Math.max(words1.size, words2.size)) * 100;
+      for (const term of searchTerms) {
+        if (!term || term.length < 3 || candidateFeeds.length > 0) continue;
+        const itunesSearchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&entity=podcast&limit=5`;
+        try {
+          const itunesResponse = await axios.get(itunesSearchUrl);
+          if (itunesResponse.data.results && itunesResponse.data.results.length > 0) {
+            candidateFeeds = itunesResponse.data.results.map(r => r.feedUrl).filter(Boolean);
+            console.log(`[iTunes] ${candidateFeeds.length} feeds candidatos encontrados para o termo: "${term}"`);
           }
-
-          if (score > highestScore && score > 30) {
-            highestScore = score;
-            bestMatch = item;
-          }
+        } catch (e) {
+          console.warn(`[iTunes] Erro ao consultar termo "${term}":`, e.message);
         }
+      }
 
-        if (bestMatch && bestMatch.enclosure && bestMatch.enclosure.url) {
-          mp3Url = bestMatch.enclosure.url;
-          resolvedFromRss = true;
-          console.log(`[RSS] Sucesso! Episódio correspondente encontrado. Áudio MP3: ${mp3Url}`);
+      // Percorre os feeds candidatos procurando o episódio correspondente
+      for (const feedUrl of candidateFeeds) {
+        if (mp3Url) break;
+        try {
+          console.log(`[RSS] Analisando feed XML: ${feedUrl}`);
+          const rssResponse = await axios.get(feedUrl, { timeout: 8000 });
+          const parsedRss = await xmlParser.parseStringPromise(rssResponse.data);
           
-          // Tenta extrair a duração real
-          if (bestMatch["itunes:duration"]) {
-            const rawDuration = bestMatch["itunes:duration"];
-            duration = rawDuration;
-            if (rawDuration.includes(":")) {
-              const parts = rawDuration.split(":").map(Number);
-              if (parts.length === 3) {
-                durationSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
-              } else if (parts.length === 2) {
-                durationSeconds = parts[0] * 60 + parts[1];
-              }
+          if (!parsedRss.rss || !parsedRss.rss.channel || !parsedRss.rss.channel.item) continue;
+          
+          const items = parsedRss.rss.channel.item;
+          const itemsArray = Array.isArray(items) ? items : [items];
+
+          let bestMatch = null;
+          let highestScore = 0;
+          const cleanString = (str) => str.toLowerCase().replace(/[^a-z0-9]/g, "");
+          const cleanTitleToMatch = cleanString(realTitle);
+
+          for (const item of itemsArray) {
+            const itemTitle = item.title;
+            if (!itemTitle) continue;
+            const cleanItemTitle = cleanString(itemTitle);
+            
+            let score = 0;
+            if (cleanItemTitle.includes(cleanTitleToMatch) || cleanTitleToMatch.includes(cleanItemTitle)) {
+              score = 100;
             } else {
-              durationSeconds = parseInt(rawDuration, 10) || 250;
-              // formata para MM:SS
-              const mins = Math.floor(durationSeconds / 60);
-              const secs = durationSeconds % 60;
-              duration = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+              const words1 = new Set(realTitle.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+              const words2 = new Set(itemTitle.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+              const intersection = new Set([...words1].filter(x => words2.has(x)));
+              score = (intersection.size / Math.max(words1.size, 1)) * 100;
+            }
+
+            if (score > highestScore && score > 25) {
+              highestScore = score;
+              bestMatch = item;
             }
           }
-        } else {
-          console.warn("[RSS] Nenhum episódio no feed RSS correspondeu ao título do Spotify oEmbed.");
+
+          if (bestMatch && bestMatch.enclosure && bestMatch.enclosure.url) {
+            mp3Url = bestMatch.enclosure.url;
+            resolvedFromRss = true;
+            console.log(`[RSS] Sucesso! Episódio correspondente encontrado com score ${highestScore}. Áudio MP3: ${mp3Url}`);
+            
+            if (bestMatch["itunes:duration"]) {
+              const rawDuration = bestMatch["itunes:duration"];
+              duration = rawDuration;
+              if (rawDuration.includes(":")) {
+                const parts = rawDuration.split(":").map(Number);
+                if (parts.length === 3) {
+                  durationSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+                } else if (parts.length === 2) {
+                  durationSeconds = parts[0] * 60 + parts[1];
+                }
+              } else {
+                durationSeconds = parseInt(rawDuration, 10) || 250;
+                const mins = Math.floor(durationSeconds / 60);
+                const secs = durationSeconds % 60;
+                duration = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+              }
+            }
+          }
+        } catch (feedErr) {
+          console.warn(`[RSS] Falha ao processar feed "${feedUrl}":`, feedErr.message);
         }
-      } else {
-        console.warn("[iTunes] Podcast não localizado no diretório do iTunes.");
       }
+
     } catch (rssErr) {
       console.error("[RSS Resolver] Falha ao obter ou processar feed RSS:", rssErr.message);
     }
 
-    // Se falhar na resolução do RSS, usa um áudio de demonstração genérico
     if (!mp3Url) {
-      console.log("[Audio] Usando áudio genérico para testes devido à falha de resolução do RSS.");
+      console.log("[Audio] Nenhum MP3 público encontrado no feed RSS do podcast.");
       mp3Url = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3";
     }
 
