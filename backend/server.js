@@ -51,37 +51,70 @@ app.post("/api/transcribe", async (req, res) => {
       console.warn("[URL Parser] Não foi possível parsear a URL para extrair tipo/ID:", e.message);
     }
 
-    // 1. Obter metadados do Spotify oEmbed
+    // 1. Detectar plataforma (YouTube vs Spotify) e obter metadados via oEmbed
+    const isYouTube = url.includes("youtube.com") || url.includes("youtu.be") || url.includes("music.youtube.com");
     let oembedData = null;
-    try {
-      const oembedUrl = `https://open.spotify.com/oembed?url=${encodeURIComponent(url)}`;
-      const oembedResponse = await axios.get(oembedUrl);
-      oembedData = oembedResponse.data;
-    } catch (err) {
-      console.error("[oEmbed] Erro ao obter metadados do oEmbed:", err.message);
-      return res.status(400).json({ error: "Não foi possível obter metadados públicos deste link do Spotify. Verifique se o link está correto." });
+
+    if (isYouTube) {
+      console.log(`[YouTube Engine] Processando link do YouTube / YouTube Music: ${url}`);
+      try {
+        const ytOembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+        const ytResponse = await axios.get(ytOembedUrl);
+        oembedData = ytResponse.data;
+      } catch (err) {
+        console.error("[YouTube oEmbed Erro]:", err.message);
+        return res.status(400).json({ error: "Não foi possível obter metadados deste link do YouTube. Verifique se o link está correto." });
+      }
+    } else {
+      try {
+        const oembedUrl = `https://open.spotify.com/oembed?url=${encodeURIComponent(url)}`;
+        const oembedResponse = await axios.get(oembedUrl);
+        oembedData = oembedResponse.data;
+      } catch (err) {
+        console.error("[Spotify oEmbed Erro]:", err.message);
+        return res.status(400).json({ error: "Não foi possível obter metadados públicos deste link do Spotify. Verifique se o link está correto." });
+      }
     }
 
-    // 2. Extrair título e nome do show
-    let realTitle = oembedData.title || "Conteúdo do Spotify";
-    let realShow = "Spotify Creator";
+    // 2. Extrair título e nome do artista/show
+    let realTitle = oembedData.title || "Conteúdo de Áudio";
+    let realShow = oembedData.author_name || "Artista / Criador";
     const realCover = oembedData.thumbnail_url || "https://images.unsplash.com/photo-1614680376593?q=80&w=300&h=300&fit=crop";
 
-    if (realTitle.includes(" - show ")) {
-      const parts = realTitle.split(" - show ");
-      realTitle = parts[0].trim();
-      realShow = parts[1].trim();
-    } else if (realTitle.includes(" | ")) {
-      const parts = realTitle.split(" | ");
-      realTitle = parts[0].trim();
-      realShow = parts[1].trim();
-    } else if (realTitle.includes(" by ")) {
-      const parts = realTitle.split(" by ");
-      realTitle = parts[0].trim();
-      realShow = parts[1].trim();
+    if (isYouTube) {
+      let rawTitle = realTitle
+        .replace(/\(official\s*music\s*video\)/gi, "")
+        .replace(/\(official\s*video\)/gi, "")
+        .replace(/\(lyric\s*video\)/gi, "")
+        .replace(/\(explicit\)/gi, "")
+        .replace(/\[official\s*audio\]/gi, "")
+        .replace(/\(audio\)/gi, "")
+        .trim();
+
+      if (rawTitle.includes(" - ")) {
+        const parts = rawTitle.split(" - ");
+        realShow = parts[0].trim();
+        realTitle = parts[1].trim();
+      } else {
+        realTitle = rawTitle;
+      }
+    } else {
+      if (realTitle.includes(" - show ")) {
+        const parts = realTitle.split(" - show ");
+        realTitle = parts[0].trim();
+        realShow = parts[1].trim();
+      } else if (realTitle.includes(" | ")) {
+        const parts = realTitle.split(" | ");
+        realTitle = parts[0].trim();
+        realShow = parts[1].trim();
+      } else if (realTitle.includes(" by ")) {
+        const parts = realTitle.split(" by ");
+        realTitle = parts[0].trim();
+        realShow = parts[1].trim();
+      }
     }
 
-    console.log(`[Metadata] Título: "${realTitle}" | Show: "${realShow}"`);
+    console.log(`[Metadata] Título: "${realTitle}" | Artista/Show: "${realShow}"`);
 
     // 3. Mapear MÚSICA ou PODCAST
     let mp3Url = null;
@@ -92,7 +125,7 @@ app.post("/api/transcribe", async (req, res) => {
     let transcriptionEngine = "simulated";
     let aiInsights = null;
 
-    const isTrack = url.includes("/track/") || mediaType === "track";
+    const isTrack = isYouTube || url.includes("/track/") || mediaType === "track";
 
     if (isTrack) {
       console.log(`[Music Engine] Processando faixa de música: "${realTitle}"`);

@@ -513,18 +513,22 @@ function processSpotifyLink(action = "transcribe") {
     const url = spotifyUrlInput.value.trim();
     
     if (!url) {
-      alert("Por favor, cole um link do Spotify!");
+      alert("Por favor, cole um link do Spotify ou YouTube Music!");
       return;
     }
     
-    // Validação ampla para cobrir spotify.com, spotify.link, spoti.fi e URIs do desktop
+    // Validação ampla para cobrir Spotify e YouTube Music
     const isSpotify = url.includes("spotify.com") || 
                       url.includes("spotify.link") || 
                       url.includes("spoti.fi") || 
                       url.startsWith("spotify:");
+
+    const isYouTube = url.includes("youtube.com") ||
+                      url.includes("youtu.be") ||
+                      url.includes("music.youtube.com");
                       
-    if (!isSpotify) {
-      alert("Por favor, cole um link válido do Spotify (ex: https://open.spotify.com/episode/... ou link compartilhado de celular)!");
+    if (!isSpotify && !isYouTube) {
+      alert("Por favor, cole um link válido do Spotify ou do YouTube Music (ex: https://music.youtube.com/watch?v=...)!");
       return;
     }
 
