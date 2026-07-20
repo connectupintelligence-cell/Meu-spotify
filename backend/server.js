@@ -486,11 +486,15 @@ app.get("/api/download", async (req, res) => {
 
     console.log(`[Proxy Download] Iniciando download para: ${url}`);
 
-    // Fetch the audio stream from the source URL
+    // Fetch the audio stream from the source URL with Chrome User-Agent header
     const response = await axios({
       method: "get",
       url: url,
       responseType: "stream",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "*/*"
+      },
       timeout: 30000 // 30 seconds timeout
     });
 
