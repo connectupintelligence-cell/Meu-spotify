@@ -18,7 +18,7 @@ let currentMatchIndex = -1;
 
 // Settings
 let defaultLanguage = "pt-BR";
-let backendUrl = "https://spotify-scribe.onrender.com";
+let backendUrl = "https://meu-spotify-1.onrender.com";
 
 // Elements
 const audio = document.getElementById("main-audio-element");
@@ -75,7 +75,7 @@ window.addEventListener("DOMContentLoaded", () => {
 function loadSettings() {
   try {
     defaultLanguage = localStorage.getItem("scribe_language") || "pt-BR";
-    backendUrl = localStorage.getItem("scribe_backend_url") || "https://spotify-scribe.onrender.com";
+    backendUrl = localStorage.getItem("scribe_backend_url") || "https://meu-spotify-1.onrender.com";
     
     const langSelect = document.getElementById("transcription-language");
     const backendInput = document.getElementById("api-backend-url");
@@ -90,7 +90,7 @@ function loadSettings() {
 function saveSettings() {
   try {
     const lang = document.getElementById("transcription-language").value;
-    const bUrl = document.getElementById("api-backend-url").value.trim() || "https://spotify-scribe.onrender.com";
+    const bUrl = document.getElementById("api-backend-url").value.trim() || "https://meu-spotify-1.onrender.com";
     
     localStorage.setItem("scribe_language", lang);
     localStorage.setItem("scribe_backend_url", bUrl);
