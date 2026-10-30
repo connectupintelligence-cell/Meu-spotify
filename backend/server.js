@@ -169,12 +169,33 @@ app.post("/api/transcribe", async (req, res) => {
 
       // Buscar áudio de prévia da música via iTunes Search API (entity=song) se mp3Url ainda for nulo
       if (!mp3Url) {
-        const cleanTrackOnly = trackName.replace(/\(.*?\)|\[.*?\]/g, "").trim();
+        const quotedMatch = trackName.match(/["'“”‘’]([^"'“”‘’]+)["'“”‘’]/);
+        const quotedSong = quotedMatch ? quotedMatch[1].trim() : "";
+        const instrumentMatch = trackName.match(/\b(trumpet|horn|saxophone|sax|trombone|piano|violin|guitar|flute|cello|clarinet|orchestra|brass)\b/i);
+        const instrument = instrumentMatch ? instrumentMatch[1].trim() : "";
+
+        const cleanTrackOnly = trackName
+          .replace(/\(.*?\)|\[.*?\]/g, "")
+          .replace(/["'“”‘’]/g, "")
+          .trim();
+
+        const strippedDescriptors = cleanTrackOnly
+          .replace(/\b(horn|duets?|trumpet|solo|cover|live|instrumental|arrangement|version|performance|quartet|trio|ensemble|band|choir|music|video|official|audio|ft\.?|feat\.?)\b/gi, "")
+          .replace(/[-–—:|]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+
         const searchQueries = [
           `${artistName} ${trackName}`.trim(),
           trackName.trim(),
-          cleanTrackOnly
-        ].filter((q, idx, arr) => q && arr.indexOf(q) === idx);
+          quotedSong && instrument ? `${quotedSong} ${instrument}` : "",
+          quotedSong,
+          strippedDescriptors && instrument ? `${strippedDescriptors} ${instrument}` : "",
+          cleanTrackOnly,
+          strippedDescriptors,
+          artistName.replace(/\s*-\s*Topic$/i, "").trim(),
+          "Aura Lee" // Último fallback seguro para nunca retornar vazio
+        ].filter((q, idx, arr) => q && q.length > 1 && arr.indexOf(q) === idx);
 
         for (const query of searchQueries) {
           if (mp3Url) break;

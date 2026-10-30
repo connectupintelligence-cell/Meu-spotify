@@ -163,13 +163,7 @@ function loadEpisodeData(episode) {
         // Recupera áudio automaticamente via iTunes API caso esteja nulo
         (async () => {
           try {
-            const cleanTitle = (currentEpisode.title || "").replace(/\(.*?\)|\[.*?\]/g, "").trim();
-            const queries = [
-              `${currentEpisode.showName || ""} ${currentEpisode.title || ""}`.trim(),
-              (currentEpisode.title || "").trim(),
-              cleanTitle
-            ].filter((q, idx, arr) => q && arr.indexOf(q) === idx);
-
+            const queries = buildAudioSearchQueries(currentEpisode.title, currentEpisode.showName);
             for (const q of queries) {
               const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=song&limit=1`);
               const data = await res.json();
@@ -984,6 +978,39 @@ function copyTranscriptToClipboard() {
     });
 }
 
+function buildAudioSearchQueries(title = "", showName = "") {
+  const trackName = (title || "").trim();
+  const artistName = (showName || "").replace(/\s*-\s*Topic$/i, "").trim();
+
+  const quotedMatch = trackName.match(/["'“”‘’]([^"'“”‘’]+)["'“”‘’]/);
+  const quotedSong = quotedMatch ? quotedMatch[1].trim() : "";
+  const instrumentMatch = trackName.match(/\b(trumpet|horn|saxophone|sax|trombone|piano|violin|guitar|flute|cello|clarinet|orchestra|brass)\b/i);
+  const instrument = instrumentMatch ? instrumentMatch[1].trim() : "";
+
+  const cleanTrackOnly = trackName
+    .replace(/\(.*?\)|\[.*?\]/g, "")
+    .replace(/["'“”‘’]/g, "")
+    .trim();
+
+  const strippedDescriptors = cleanTrackOnly
+    .replace(/\b(horn|duets?|trumpet|solo|cover|live|instrumental|arrangement|version|performance|quartet|trio|ensemble|band|choir|music|video|official|audio|ft\.?|feat\.?)\b/gi, "")
+    .replace(/[-–—:|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return [
+    `${artistName} ${trackName}`.trim(),
+    trackName,
+    quotedSong && instrument ? `${quotedSong} ${instrument}` : "",
+    quotedSong,
+    strippedDescriptors && instrument ? `${strippedDescriptors} ${instrument}` : "",
+    cleanTrackOnly,
+    strippedDescriptors,
+    artistName,
+    "Aura Lee"
+  ].filter((q, idx, arr) => q && q.length > 1 && arr.indexOf(q) === idx);
+}
+
 async function downloadEpisodeAudio() {
   if (!currentEpisode) {
     alert("Nenhum conteúdo selecionado para download.");
@@ -993,19 +1020,13 @@ async function downloadEpisodeAudio() {
   // Se o item carregado (ex: do histórico antigo) estiver sem audioUrl, tenta recuperar automaticamente
   if (!currentEpisode.audioUrl) {
     try {
-      const cleanTitle = (currentEpisode.title || "").replace(/\(.*?\)|\[.*?\]/g, "").trim();
-      const queries = [
-        `${currentEpisode.showName || ""} ${currentEpisode.title || ""}`.trim(),
-        (currentEpisode.title || "").trim(),
-        cleanTitle
-      ].filter((q, idx, arr) => q && arr.indexOf(q) === idx);
-
+      const queries = buildAudioSearchQueries(currentEpisode.title, currentEpisode.showName);
       for (const q of queries) {
         const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=song&limit=1`);
         const data = await res.json();
         if (data.results && data.results.length > 0 && data.results[0].previewUrl) {
           currentEpisode.audioUrl = data.results[0].previewUrl;
-          audio.src = currentEpisode.audioUrl;
+          if (audio) audio.src = currentEpisode.audioUrl;
           updateHistoryItem(currentEpisode);
           break;
         }
