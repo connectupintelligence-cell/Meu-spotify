@@ -169,28 +169,39 @@ app.post("/api/transcribe", async (req, res) => {
 
       // Buscar áudio de prévia da música via iTunes Search API (entity=song) se mp3Url ainda for nulo
       if (!mp3Url) {
-        try {
-          console.log(`[iTunes Song] Buscando faixa: "${artistName} ${trackName}"`);
-          const songSearchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent((artistName + ' ' + trackName).trim())}&entity=song&limit=1`;
-          const songRes = await axios.get(songSearchUrl);
+        const cleanTrackOnly = trackName.replace(/\(.*?\)|\[.*?\]/g, "").trim();
+        const searchQueries = [
+          `${artistName} ${trackName}`.trim(),
+          trackName.trim(),
+          cleanTrackOnly
+        ].filter((q, idx, arr) => q && arr.indexOf(q) === idx);
 
-          if (songRes.data.results && songRes.data.results.length > 0) {
-            const songInfo = songRes.data.results[0];
-            if (songInfo.previewUrl) {
-              mp3Url = songInfo.previewUrl;
-              resolvedFromRss = true;
+        for (const query of searchQueries) {
+          if (mp3Url) break;
+          try {
+            console.log(`[iTunes Song] Buscando faixa com termo: "${query}"`);
+            const songSearchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=1`;
+            const songRes = await axios.get(songSearchUrl);
+
+            if (songRes.data.results && songRes.data.results.length > 0) {
+              const songInfo = songRes.data.results[0];
+              if (songInfo.previewUrl) {
+                mp3Url = songInfo.previewUrl;
+                resolvedFromRss = true;
+                console.log(`[iTunes Song] Áudio encontrado para "${query}": ${mp3Url}`);
+              }
+              if (songInfo.trackName && !realTitle) realTitle = songInfo.trackName;
+              if (songInfo.artistName && (!realShow || realShow === "Spotify Creator")) realShow = songInfo.artistName;
+              if (songInfo.trackTimeMillis) {
+                durationSeconds = Math.round(songInfo.trackTimeMillis / 1000);
+                const mins = Math.floor(durationSeconds / 60);
+                const secs = durationSeconds % 60;
+                duration = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+              }
             }
-            if (songInfo.trackName) realTitle = songInfo.trackName;
-            if (songInfo.artistName) realShow = songInfo.artistName;
-            if (songInfo.trackTimeMillis) {
-              durationSeconds = Math.round(songInfo.trackTimeMillis / 1000);
-              const mins = Math.floor(durationSeconds / 60);
-              const secs = durationSeconds % 60;
-              duration = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-            }
+          } catch (songErr) {
+            console.warn(`[iTunes Song] Falha ao consultar API de música para "${query}":`, songErr.message);
           }
-        } catch (songErr) {
-          console.warn("[iTunes Song] Falha ao consultar API de música:", songErr.message);
         }
       }
 

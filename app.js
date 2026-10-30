@@ -155,9 +155,38 @@ function loadEpisodeData(episode) {
     
     // Reset áudio & estado do player
     if (audio) {
-      audio.src = currentEpisode.audioUrl;
-      audio.playbackRate = playbackSpeed;
-      audio.load();
+      if (currentEpisode.audioUrl) {
+        audio.src = currentEpisode.audioUrl;
+        audio.playbackRate = playbackSpeed;
+        audio.load();
+      } else {
+        // Recupera áudio automaticamente via iTunes API caso esteja nulo
+        (async () => {
+          try {
+            const cleanTitle = (currentEpisode.title || "").replace(/\(.*?\)|\[.*?\]/g, "").trim();
+            const queries = [
+              `${currentEpisode.showName || ""} ${currentEpisode.title || ""}`.trim(),
+              (currentEpisode.title || "").trim(),
+              cleanTitle
+            ].filter((q, idx, arr) => q && arr.indexOf(q) === idx);
+
+            for (const q of queries) {
+              const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=song&limit=1`);
+              const data = await res.json();
+              if (data.results && data.results.length > 0 && data.results[0].previewUrl) {
+                currentEpisode.audioUrl = data.results[0].previewUrl;
+                audio.src = currentEpisode.audioUrl;
+                audio.playbackRate = playbackSpeed;
+                audio.load();
+                updateHistoryItem(currentEpisode);
+                break;
+              }
+            }
+          } catch (e) {
+            console.warn("Falha ao recuperar áudio em loadEpisodeData:", e);
+          }
+        })();
+      }
     }
     
     isPlaying = false;
@@ -955,8 +984,38 @@ function copyTranscriptToClipboard() {
     });
 }
 
-function downloadEpisodeAudio() {
-  if (!currentEpisode || !currentEpisode.audioUrl) {
+async function downloadEpisodeAudio() {
+  if (!currentEpisode) {
+    alert("Nenhum conteúdo selecionado para download.");
+    return;
+  }
+
+  // Se o item carregado (ex: do histórico antigo) estiver sem audioUrl, tenta recuperar automaticamente
+  if (!currentEpisode.audioUrl) {
+    try {
+      const cleanTitle = (currentEpisode.title || "").replace(/\(.*?\)|\[.*?\]/g, "").trim();
+      const queries = [
+        `${currentEpisode.showName || ""} ${currentEpisode.title || ""}`.trim(),
+        (currentEpisode.title || "").trim(),
+        cleanTitle
+      ].filter((q, idx, arr) => q && arr.indexOf(q) === idx);
+
+      for (const q of queries) {
+        const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=song&limit=1`);
+        const data = await res.json();
+        if (data.results && data.results.length > 0 && data.results[0].previewUrl) {
+          currentEpisode.audioUrl = data.results[0].previewUrl;
+          audio.src = currentEpisode.audioUrl;
+          updateHistoryItem(currentEpisode);
+          break;
+        }
+      }
+    } catch (err) {
+      console.warn("Erro ao tentar buscar áudio de fallback:", err);
+    }
+  }
+
+  if (!currentEpisode.audioUrl) {
     alert("Nenhum áudio disponível para download.");
     return;
   }
