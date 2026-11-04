@@ -1036,19 +1036,19 @@ async function downloadEpisodeAudio() {
     }
   }
 
-  if (!currentEpisode.audioUrl) {
+  if (!currentEpisode.audioUrl && !currentEpisode.spotifyUrl && !currentEpisode.title) {
     alert("Nenhum áudio disponível para download.");
     return;
   }
 
   // Se for o áudio genérico de demonstração / não localizado no RSS
-  if (currentEpisode.audioUrl.includes("soundhelix.com")) {
+  if (currentEpisode.audioUrl && currentEpisode.audioUrl.includes("soundhelix.com")) {
     alert("Atenção: Este episódio não possui um feed RSS público de MP3 disponível. Podcasts exclusivos do Spotify utilizam criptografia DRM e não fornecem links de download direto.");
     return;
   }
 
-  // Utiliza a rota de proxy de download do backend para forçar o download direto
-  const downloadUrl = `${backendUrl}/api/download?url=${encodeURIComponent(currentEpisode.audioUrl)}&title=${encodeURIComponent(currentEpisode.title)}`;
+  // Utiliza a rota de proxy de download do backend (com sourceUrl e artist para baixar o MP3 completo do YouTube)
+  const downloadUrl = `${backendUrl}/api/download?url=${encodeURIComponent(currentEpisode.audioUrl || "")}&title=${encodeURIComponent(currentEpisode.title || "audio")}&sourceUrl=${encodeURIComponent(currentEpisode.spotifyUrl || "")}&artist=${encodeURIComponent(currentEpisode.showName || "")}`;
 
   const link = document.createElement("a");
   link.href = downloadUrl;

@@ -15,6 +15,105 @@ app.use(express.json());
 // XML Parser for RSS feeds
 const xmlParser = new xml2js.Parser({ explicitArray: false, mergeAttrs: true });
 
+const SAVENOW_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Referer": "https://loader.to/",
+  "Accept": "*/*"
+};
+
+/**
+ * Normaliza qualquer variante de link do YouTube (youtu.be, music.youtube.com, shorts, watch?v=)
+ * para https://www.youtube.com/watch?v=VIDEO_ID
+ */
+function normalizeYouTubeUrl(rawUrl) {
+  if (!rawUrl) return null;
+  try {
+    const u = new URL(rawUrl);
+    if (u.hostname === "youtu.be") {
+      const id = u.pathname.split("/").filter(Boolean)[0];
+      if (id) return `https://www.youtube.com/watch?v=${id}`;
+    }
+    if (u.searchParams.get("v")) {
+      return `https://www.youtube.com/watch?v=${u.searchParams.get("v")}`;
+    }
+    const shortsMatch = u.pathname.match(/\/shorts\/([a-zA-Z0-9_-]{11})/);
+    if (shortsMatch) {
+      return `https://www.youtube.com/watch?v=${shortsMatch[1]}`;
+    }
+  } catch (e) {
+    // ignore URL parse error
+  }
+  const regexMatch = rawUrl.match(/(?:v=|youtu\.be\/|\/shorts\/)([a-zA-Z0-9_-]{11})/);
+  return regexMatch ? `https://www.youtube.com/watch?v=${regexMatch[1]}` : rawUrl;
+}
+
+/**
+ * Busca um vídeo no YouTube pelo nome da música/artista e retorna a URL do vídeo
+ */
+async function searchYouTubeVideoUrl(query) {
+  if (!query || !query.trim()) return null;
+  try {
+    console.log(`[YouTube Search] Buscando vídeo completo para: "${query}"`);
+    const res = await axios.get(`https://www.youtube.com/results?search_query=${encodeURIComponent(query.trim())}`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+      },
+      timeout: 8000
+    });
+    const match = res.data.match(/"videoId":"([a-zA-Z0-9_-]{11})"/);
+    if (match && match[1]) {
+      const foundUrl = `https://www.youtube.com/watch?v=${match[1]}`;
+      console.log(`[YouTube Search] Vídeo encontrado: ${foundUrl}`);
+      return foundUrl;
+    }
+  } catch (err) {
+    console.warn("[YouTube Search] Erro ao buscar vídeo no YouTube:", err.message);
+  }
+  return null;
+}
+
+/**
+ * Converte um vídeo do YouTube em MP3 completo (100% da duração) via API SaveNow/Loader
+ */
+async function extractFullYouTubeMp3(rawYoutubeUrl) {
+  const cleanUrl = normalizeYouTubeUrl(rawYoutubeUrl);
+  if (!cleanUrl) return null;
+
+  try {
+    console.log(`[Full MP3 Engine] Iniciando extração de MP3 completo para: ${cleanUrl}`);
+    const initRes = await axios.get(
+      `https://p.savenow.to/ajax/download.php?format=mp3&url=${encodeURIComponent(cleanUrl)}`,
+      { headers: SAVENOW_HEADERS, timeout: 10000 }
+    );
+
+    if (!initRes.data || !initRes.data.id) {
+      console.warn("[Full MP3 Engine] Resposta inicial sem ID:", initRes.data);
+      return null;
+    }
+
+    const jobId = initRes.data.id;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      const progRes = await axios.get(
+        `https://p.savenow.to/api/progress?id=${encodeURIComponent(jobId)}`,
+        { headers: SAVENOW_HEADERS, timeout: 8000 }
+      );
+
+      if (progRes.data && progRes.data.download_url) {
+        console.log(`[Full MP3 Engine] MP3 Completo pronto: ${progRes.data.download_url}`);
+        return progRes.data.download_url;
+      }
+
+      if (progRes.data && progRes.data.progress >= 1000 && !progRes.data.download_url) {
+        break;
+      }
+    }
+  } catch (err) {
+    console.warn("[Full MP3 Engine] Falha ao extrair MP3 completo:", err.message);
+  }
+  return null;
+}
+
 // Basic health check endpoint
 app.get("/health", (req, res) => {
   res.json({ status: "ok", message: "Spotify Scribe Backend is running!" });
@@ -145,30 +244,24 @@ app.post("/api/transcribe", async (req, res) => {
       }
 
       if (isYouTube) {
-        try {
-          console.log(`[ytdl] Tentando extrair fluxo de áudio direto do YouTube para URL: ${url}`);
-          if (ytdl.validateURL(url)) {
-            const info = await ytdl.getInfo(url);
-            const format = ytdl.chooseFormat(info.formats, { filter: "audioonly", quality: "highestaudio" });
-            if (format && format.url) {
-              mp3Url = format.url;
-              resolvedFromRss = true;
-              console.log(`[ytdl] Sucesso! Áudio completo do YouTube extraído.`);
-              if (info.videoDetails && info.videoDetails.lengthSeconds) {
-                durationSeconds = parseInt(info.videoDetails.lengthSeconds, 10);
-                const mins = Math.floor(durationSeconds / 60);
-                const secs = durationSeconds % 60;
-                duration = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-              }
-            }
+        const fullMp3 = await extractFullYouTubeMp3(url);
+        if (fullMp3) {
+          mp3Url = fullMp3;
+          resolvedFromRss = true;
+        }
+      } else {
+        const ytVideoUrl = await searchYouTubeVideoUrl(`${artistName} ${trackName} audio`);
+        if (ytVideoUrl) {
+          const fullMp3 = await extractFullYouTubeMp3(ytVideoUrl);
+          if (fullMp3) {
+            mp3Url = fullMp3;
+            resolvedFromRss = true;
           }
-        } catch (ytdlErr) {
-          console.warn("[ytdl] Falha ao extrair áudio via ytdl:", ytdlErr.message);
         }
       }
 
-      // Buscar áudio de prévia da música via iTunes Search API (entity=song) se mp3Url ainda for nulo
-      if (!mp3Url) {
+      // Buscar metadados de duração (e áudio de fallback se mp3Url ainda for nulo) via iTunes Search API
+      {
         const quotedMatch = trackName.match(/["'“”‘’]([^"'“”‘’]+)["'“”‘’]/);
         const quotedSong = quotedMatch ? quotedMatch[1].trim() : "";
         const instrumentMatch = trackName.match(/\b(trumpet|horn|saxophone|sax|trombone|piano|violin|guitar|flute|cello|clarinet|orchestra|brass)\b/i);
@@ -194,11 +287,12 @@ app.post("/api/transcribe", async (req, res) => {
           cleanTrackOnly,
           strippedDescriptors,
           artistName.replace(/\s*-\s*Topic$/i, "").trim(),
-          "Aura Lee" // Último fallback seguro para nunca retornar vazio
+          "Aura Lee"
         ].filter((q, idx, arr) => q && q.length > 1 && arr.indexOf(q) === idx);
 
+        let foundMeta = false;
         for (const query of searchQueries) {
-          if (mp3Url) break;
+          if (mp3Url && foundMeta) break;
           try {
             console.log(`[iTunes Song] Buscando faixa com termo: "${query}"`);
             const songSearchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=1`;
@@ -206,10 +300,10 @@ app.post("/api/transcribe", async (req, res) => {
 
             if (songRes.data.results && songRes.data.results.length > 0) {
               const songInfo = songRes.data.results[0];
-              if (songInfo.previewUrl) {
+              if (!mp3Url && songInfo.previewUrl) {
                 mp3Url = songInfo.previewUrl;
                 resolvedFromRss = true;
-                console.log(`[iTunes Song] Áudio encontrado para "${query}": ${mp3Url}`);
+                console.log(`[iTunes Song] Áudio de fallback encontrado para "${query}": ${mp3Url}`);
               }
               if (songInfo.trackName && !realTitle) realTitle = songInfo.trackName;
               if (songInfo.artistName && (!realShow || realShow === "Spotify Creator")) realShow = songInfo.artistName;
@@ -219,6 +313,7 @@ app.post("/api/transcribe", async (req, res) => {
                 const secs = durationSeconds % 60;
                 duration = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
               }
+              foundMeta = true;
             }
           } catch (songErr) {
             console.warn(`[iTunes Song] Falha ao consultar API de música para "${query}":`, songErr.message);
@@ -510,24 +605,47 @@ app.post("/api/transcribe", async (req, res) => {
  */
 app.get("/api/download", async (req, res) => {
   try {
-    const { url, title } = req.query;
+    const { url, title, sourceUrl, artist } = req.query;
 
-    if (!url) {
-      return res.status(400).send("URL is required");
+    if (!url && !sourceUrl && !title) {
+      return res.status(400).send("URL or title is required");
     }
 
-    console.log(`[Proxy Download] Iniciando download para: ${url}`);
+    let targetStreamUrl = url || "";
+    const isSourceYouTube = sourceUrl && (sourceUrl.includes("youtube.com") || sourceUrl.includes("youtu.be"));
+    const isPreviewOrOneTime =
+      !targetStreamUrl ||
+      targetStreamUrl.includes("itunes.apple.com") ||
+      targetStreamUrl.includes("savenow.to");
 
-    // Fetch the audio stream from the source URL with Chrome User-Agent header
+    // Sempre gera um link novo de MP3 Completo se a origem for YouTube ou se o áudio atual for apenas prévia de 30s do iTunes
+    if (isSourceYouTube || isPreviewOrOneTime) {
+      let ytUrlToConvert = isSourceYouTube ? sourceUrl : null;
+      if (!ytUrlToConvert && title) {
+        const searchTerm = `${artist && artist !== "Artista / Criador" ? artist : ""} ${title}`.trim();
+        ytUrlToConvert = await searchYouTubeVideoUrl(searchTerm);
+      }
+      if (ytUrlToConvert) {
+        const freshFullMp3 = await extractFullYouTubeMp3(ytUrlToConvert);
+        if (freshFullMp3) {
+          targetStreamUrl = freshFullMp3;
+        }
+      }
+    }
+
+    if (!targetStreamUrl) {
+      return res.status(404).send("Não foi possível localizar o fluxo de áudio para download.");
+    }
+
+    console.log(`[Proxy Download] Iniciando download completo para: ${targetStreamUrl}`);
+
+    // Fetch the audio stream from the source URL with Referer & Chrome User-Agent header
     const response = await axios({
       method: "get",
-      url: url,
+      url: targetStreamUrl,
       responseType: "stream",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "*/*"
-      },
-      timeout: 30000 // 30 seconds timeout
+      headers: SAVENOW_HEADERS,
+      timeout: 45000 // 45 seconds timeout
     });
 
     const safeTitle = (title || "audio").replace(/[^a-z0-9]/gi, "_").toLowerCase();
@@ -535,6 +653,9 @@ app.get("/api/download", async (req, res) => {
     // Set headers to force file download
     res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.mp3"`);
     res.setHeader("Content-Type", "audio/mpeg");
+    if (response.headers["content-length"]) {
+      res.setHeader("Content-Length", response.headers["content-length"]);
+    }
 
     // Pipe the response stream directly to the Express response
     response.data.pipe(res);
