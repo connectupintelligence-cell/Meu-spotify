@@ -154,8 +154,14 @@ function loadEpisodeData(episode) {
     currentEpisode = JSON.parse(JSON.stringify(episode)); // deep clone
     
     // Reset áudio & estado do player
+    const isInstagramEp =
+      currentEpisode.category === "Instagram" ||
+      (currentEpisode.spotifyUrl && (currentEpisode.spotifyUrl.includes("instagram.com") || currentEpisode.spotifyUrl.includes("instagr.am")));
+    const isYouTubeEp =
+      currentEpisode.spotifyUrl && (currentEpisode.spotifyUrl.includes("youtube.com") || currentEpisode.spotifyUrl.includes("youtu.be"));
+
     if (audio) {
-      const isShortPreview = !currentEpisode.audioUrl || currentEpisode.audioUrl.includes("itunes.apple.com");
+      const isShortPreview = !isInstagramEp && (!currentEpisode.audioUrl || currentEpisode.audioUrl.includes("itunes.apple.com"));
       if (currentEpisode.audioUrl) {
         audio.src = currentEpisode.audioUrl;
         audio.playbackRate = playbackSpeed;
@@ -194,7 +200,16 @@ function loadEpisodeData(episode) {
     if (wsEpisodeTitle) wsEpisodeTitle.textContent = currentEpisode.title;
     if (wsDateAdded) wsDateAdded.innerHTML = `<i class="fa-regular fa-calendar"></i> ${formatDateString(currentEpisode.dateAdded)}`;
     if (wsDuration) wsDuration.innerHTML = `<i class="fa-regular fa-clock"></i> ${currentEpisode.duration}`;
-    if (wsSpotifyLink) wsSpotifyLink.href = currentEpisode.spotifyUrl;
+    if (wsSpotifyLink) {
+      wsSpotifyLink.href = currentEpisode.spotifyUrl;
+      if (isInstagramEp) {
+        wsSpotifyLink.innerHTML = '<i class="fa-brands fa-instagram"></i> Abrir no Instagram <i class="fa-solid fa-arrow-up-right-from-square" style="font-size: 0.7rem;"></i>';
+      } else if (isYouTubeEp) {
+        wsSpotifyLink.innerHTML = '<i class="fa-brands fa-youtube"></i> Abrir no YouTube <i class="fa-solid fa-arrow-up-right-from-square" style="font-size: 0.7rem;"></i>';
+      } else {
+        wsSpotifyLink.innerHTML = '<i class="fa-brands fa-spotify"></i> Abrir no Spotify <i class="fa-solid fa-arrow-up-right-from-square" style="font-size: 0.7rem;"></i>';
+      }
+    }
     
     // Rótulos do player inferior
     const playerTrackCover = document.getElementById("player-track-cover");
@@ -538,11 +553,11 @@ function processSpotifyLink(action = "transcribe") {
     const url = spotifyUrlInput.value.trim();
     
     if (!url) {
-      alert("Por favor, cole um link do Spotify ou YouTube Music!");
+      alert("Por favor, cole um link do Spotify, YouTube Music ou Instagram!");
       return;
     }
     
-    // Validação ampla para cobrir Spotify e YouTube Music
+    // Validação ampla para cobrir Spotify, YouTube Music e Instagram (Reels/Posts)
     const isSpotify = url.includes("spotify.com") || 
                       url.includes("spotify.link") || 
                       url.includes("spoti.fi") || 
@@ -551,9 +566,12 @@ function processSpotifyLink(action = "transcribe") {
     const isYouTube = url.includes("youtube.com") ||
                       url.includes("youtu.be") ||
                       url.includes("music.youtube.com");
+
+    const isInstagram = url.includes("instagram.com") ||
+                        url.includes("instagr.am");
                       
-    if (!isSpotify && !isYouTube) {
-      alert("Por favor, cole um link válido do Spotify ou do YouTube Music (ex: https://music.youtube.com/watch?v=...)!");
+    if (!isSpotify && !isYouTube && !isInstagram) {
+      alert("Por favor, cole um link válido do Spotify, YouTube Music ou Instagram (ex: https://www.instagram.com/reel/...)!");
       return;
     }
 
@@ -1069,8 +1087,12 @@ async function downloadEpisodeAudio() {
   });
 
   try {
+    const isInstagramEp =
+      currentEpisode.category === "Instagram" ||
+      (currentEpisode.spotifyUrl && (currentEpisode.spotifyUrl.includes("instagram.com") || currentEpisode.spotifyUrl.includes("instagr.am")));
+
     // Se estiver sem áudio ou com prévia de 30s do iTunes, substitui imediatamente pela versão COMPLETA (320kbps)
-    if (!currentEpisode.audioUrl || currentEpisode.audioUrl.includes("itunes.apple.com")) {
+    if (!isInstagramEp && (!currentEpisode.audioUrl || currentEpisode.audioUrl.includes("itunes.apple.com"))) {
       const fullTrack = await findFullSongAudioClient(currentEpisode.title, currentEpisode.showName);
       if (fullTrack && fullTrack.url) {
         currentEpisode.audioUrl = fullTrack.url;
