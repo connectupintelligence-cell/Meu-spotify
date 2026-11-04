@@ -81,9 +81,9 @@ async function extractFullYouTubeMp3(rawYoutubeUrl) {
   if (!cleanUrl) return null;
 
   try {
-    console.log(`[Full MP3 Engine] Iniciando extração de MP3 completo para: ${cleanUrl}`);
+    console.log(`[Full MP3 Engine] Iniciando extração de MP3 completo (128 kbps) para: ${cleanUrl}`);
     const initRes = await axios.get(
-      `https://p.savenow.to/ajax/download.php?format=mp3&url=${encodeURIComponent(cleanUrl)}`,
+      `https://p.savenow.to/ajax/download.php?format=mp3&audio_quality=128&url=${encodeURIComponent(cleanUrl)}`,
       { headers: SAVENOW_HEADERS, timeout: 10000 }
     );
 
@@ -173,7 +173,10 @@ async function searchFullLengthSong(title, showName) {
           results.find(s => Array.isArray(s.downloadUrl) && s.downloadUrl.length > 0);
 
         if (match) {
-          const bestDl = match.downloadUrl[match.downloadUrl.length - 1];
+          const bestDl =
+            match.downloadUrl.find(d => d.quality === "160kbps") ||
+            match.downloadUrl.find(d => d.quality === "96kbps") ||
+            match.downloadUrl[match.downloadUrl.length - 1];
           if (bestDl && bestDl.url) {
             const durSec = Number(match.duration) || 210;
             const mins = Math.floor(durSec / 60);

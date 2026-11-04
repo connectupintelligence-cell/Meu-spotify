@@ -1046,7 +1046,11 @@ async function findFullSongAudioClient(title, showName) {
           results.find(s => Number(s.duration) >= 90 && Array.isArray(s.downloadUrl) && s.downloadUrl.length > 0) ||
           results.find(s => Array.isArray(s.downloadUrl) && s.downloadUrl.length > 0);
         if (match) {
-          const bestDl = match.downloadUrl[match.downloadUrl.length - 1];
+          // Prioriza stream de 160kbps/96kbps para conversão rápida em MP3 de 128 kbps
+          const bestDl =
+            match.downloadUrl.find(d => d.quality === "160kbps") ||
+            match.downloadUrl.find(d => d.quality === "96kbps") ||
+            match.downloadUrl[match.downloadUrl.length - 1];
           if (bestDl && bestDl.url) {
             const durSec = Number(match.duration) || 210;
             const mins = Math.floor(durSec / 60);
@@ -1066,6 +1070,74 @@ async function findFullSongAudioClient(title, showName) {
   return null;
 }
 
+/**
+ * Converte qualquer fluxo de áudio (MP4/AAC/M4A/WebM/WAV) em arquivo MP3 real com taxa de bits de 128 kbps CBR
+ */
+async function convertArrayBufferToMp3_128kbps(arrayBuffer) {
+  if (typeof window.lamejs === "undefined") {
+    return new Blob([arrayBuffer], { type: "audio/mpeg" });
+  }
+
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const audioCtx = new AudioCtx();
+
+  try {
+    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+    const channels = Math.min(2, audioBuffer.numberOfChannels);
+    const sampleRate = audioBuffer.sampleRate;
+    const targetBitrateKbps = 128; // Taxa de bits ideal: 128 kbps
+
+    const mp3encoder = new window.lamejs.Mp3Encoder(channels, sampleRate, targetBitrateKbps);
+
+    const floatTo16BitPCM = (float32Arr) => {
+      const int16Arr = new Int16Array(float32Arr.length);
+      for (let i = 0; i < float32Arr.length; i++) {
+        const s = Math.max(-1, Math.min(1, float32Arr[i]));
+        int16Arr[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      return int16Arr;
+    };
+
+    const leftPCM = floatTo16BitPCM(audioBuffer.getChannelData(0));
+    const rightPCM = channels > 1 ? floatTo16BitPCM(audioBuffer.getChannelData(1)) : undefined;
+
+    const mp3Chunks = [];
+    const blockSize = 1152;
+
+    for (let i = 0; i < leftPCM.length; i += blockSize) {
+      const leftSub = leftPCM.subarray(i, i + blockSize);
+      const rightSub = channels > 1 ? rightPCM.subarray(i, i + blockSize) : undefined;
+      const mp3buf = channels > 1
+        ? mp3encoder.encodeBuffer(leftSub, rightSub)
+        : mp3encoder.encodeBuffer(leftSub);
+
+      if (mp3buf.length > 0) {
+        mp3Chunks.push(new Int8Array(mp3buf));
+      }
+
+      // Libera a thread da interface periodicamente para manter o carregamento fluido
+      if ((i / blockSize) % 250 === 0) {
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+
+    const endBuf = mp3encoder.flush();
+    if (endBuf.length > 0) {
+      mp3Chunks.push(new Int8Array(endBuf));
+    }
+
+    return new Blob(mp3Chunks, { type: "audio/mpeg" });
+  } finally {
+    if (audioCtx && audioCtx.state !== "closed") {
+      try {
+        await audioCtx.close();
+      } catch (e) {
+        // ignore close error
+      }
+    }
+  }
+}
+
 async function downloadEpisodeAudio() {
   if (!currentEpisode) {
     alert("Nenhum conteúdo selecionado para download.");
@@ -1082,7 +1154,7 @@ async function downloadEpisodeAudio() {
   const originalHtmlMap = new Map();
   downloadBtns.forEach(btn => {
     originalHtmlMap.set(btn, btn.innerHTML);
-    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Baixando MP3...';
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Preparando MP3 128kbps...';
     btn.disabled = true;
   });
 
@@ -1091,7 +1163,7 @@ async function downloadEpisodeAudio() {
       currentEpisode.category === "Instagram" ||
       (currentEpisode.spotifyUrl && (currentEpisode.spotifyUrl.includes("instagram.com") || currentEpisode.spotifyUrl.includes("instagr.am")));
 
-    // Se estiver sem áudio ou com prévia de 30s do iTunes, substitui imediatamente pela versão COMPLETA (320kbps)
+    // Se estiver sem áudio ou com prévia de 30s do iTunes, substitui imediatamente pela versão COMPLETA
     if (!isInstagramEp && (!currentEpisode.audioUrl || currentEpisode.audioUrl.includes("itunes.apple.com"))) {
       const fullTrack = await findFullSongAudioClient(currentEpisode.title, currentEpisode.showName);
       if (fullTrack && fullTrack.url) {
@@ -1108,13 +1180,17 @@ async function downloadEpisodeAudio() {
 
     const safeTitle = (currentEpisode.title || "musica").replace(/[^a-z0-9]/gi, "_").toLowerCase();
 
-    // Tenta baixar o arquivo completo diretamente via Blob no navegador (mais rápido e sem depender do Render)
+    // Baixa o fluxo de áudio e codifica em MP3 padrão de 128 kbps CBR
     if (currentEpisode.audioUrl && !currentEpisode.audioUrl.includes("itunes.apple.com")) {
       try {
         const audioRes = await fetch(currentEpisode.audioUrl);
         if (audioRes.ok) {
-          const blob = await audioRes.blob();
-          const blobUrl = URL.createObjectURL(blob);
+          const rawBuffer = await audioRes.arrayBuffer();
+          downloadBtns.forEach(btn => {
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Convertendo 128 kbps...';
+          });
+          const mp3Blob = await convertArrayBufferToMp3_128kbps(rawBuffer);
+          const blobUrl = URL.createObjectURL(mp3Blob);
           const a = document.createElement("a");
           a.href = blobUrl;
           a.download = `${safeTitle}.mp3`;
@@ -1130,7 +1206,7 @@ async function downloadEpisodeAudio() {
     }
 
     // Fallback: Utiliza a rota de proxy de download do backend
-    const downloadUrl = `${backendUrl}/api/download?url=${encodeURIComponent(currentEpisode.audioUrl || "")}&title=${encodeURIComponent(currentEpisode.title || "audio")}&sourceUrl=${encodeURIComponent(currentEpisode.spotifyUrl || "")}&artist=${encodeURIComponent(currentEpisode.showName || "")}`;
+    const downloadUrl = `${backendUrl}/api/download?url=${encodeURIComponent(currentEpisode.audioUrl || "")}&title=${encodeURIComponent(currentEpisode.title || "audio")}&sourceUrl=${encodeURIComponent(currentEpisode.spotifyUrl || "")}&artist=${encodeURIComponent(currentEpisode.showName || "")}&bitrate=128`;
     const link = document.createElement("a");
     link.href = downloadUrl;
     link.target = "_blank";
