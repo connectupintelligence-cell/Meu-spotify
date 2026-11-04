@@ -155,29 +155,31 @@ function loadEpisodeData(episode) {
     
     // Reset áudio & estado do player
     if (audio) {
+      const isShortPreview = !currentEpisode.audioUrl || currentEpisode.audioUrl.includes("itunes.apple.com");
       if (currentEpisode.audioUrl) {
         audio.src = currentEpisode.audioUrl;
         audio.playbackRate = playbackSpeed;
         audio.load();
-      } else {
-        // Recupera áudio automaticamente via iTunes API caso esteja nulo
+      }
+      if (isShortPreview) {
+        // Substitui automaticamente prévias de 30s do iTunes ou links ausentes pela faixa COMPLETA (320kbps)
         (async () => {
           try {
-            const queries = buildAudioSearchQueries(currentEpisode.title, currentEpisode.showName);
-            for (const q of queries) {
-              const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=song&limit=1`);
-              const data = await res.json();
-              if (data.results && data.results.length > 0 && data.results[0].previewUrl) {
-                currentEpisode.audioUrl = data.results[0].previewUrl;
-                audio.src = currentEpisode.audioUrl;
-                audio.playbackRate = playbackSpeed;
-                audio.load();
-                updateHistoryItem(currentEpisode);
-                break;
+            const fullTrack = await findFullSongAudioClient(currentEpisode.title, currentEpisode.showName);
+            if (fullTrack && fullTrack.url) {
+              currentEpisode.audioUrl = fullTrack.url;
+              if (fullTrack.duration) {
+                currentEpisode.duration = fullTrack.duration;
+                currentEpisode.durationSeconds = fullTrack.durationSeconds;
+                if (wsDuration) wsDuration.innerHTML = `<i class="fa-regular fa-clock"></i> ${currentEpisode.duration}`;
               }
+              audio.src = currentEpisode.audioUrl;
+              audio.playbackRate = playbackSpeed;
+              audio.load();
+              updateHistoryItem(currentEpisode);
             }
           } catch (e) {
-            console.warn("Falha ao recuperar áudio em loadEpisodeData:", e);
+            console.warn("Falha ao recuperar áudio completo em loadEpisodeData:", e);
           }
         })();
       }
@@ -980,7 +982,9 @@ function copyTranscriptToClipboard() {
 
 function buildAudioSearchQueries(title = "", showName = "") {
   const trackName = (title || "").trim();
-  const artistName = (showName || "").replace(/\s*-\s*Topic$/i, "").trim();
+  const rawArtist = (showName || "").replace(/\s*-\s*Topic$/i, "").trim();
+  const isGenericArtist = /^(Artista\s*\/\s*Criador|Spotify\s*Creator|Arquivo\s*Local)$/i.test(rawArtist);
+  const artistName = isGenericArtist ? "" : rawArtist;
 
   const quotedMatch = trackName.match(/["'“”‘’]([^"'“”‘’]+)["'“”‘’]/);
   const quotedSong = quotedMatch ? quotedMatch[1].trim() : "";
@@ -999,45 +1003,54 @@ function buildAudioSearchQueries(title = "", showName = "") {
     .trim();
 
   return [
-    `${artistName} ${trackName}`.trim(),
-    trackName,
+    artistName ? `${artistName} ${cleanTrackOnly}`.trim() : "",
+    artistName ? `${artistName} ${trackName}`.trim() : "",
     quotedSong && instrument ? `${quotedSong} ${instrument}` : "",
     quotedSong,
     strippedDescriptors && instrument ? `${strippedDescriptors} ${instrument}` : "",
     cleanTrackOnly,
     strippedDescriptors,
+    trackName,
     artistName,
     "Aura Lee"
   ].filter((q, idx, arr) => q && q.length > 1 && arr.indexOf(q) === idx);
 }
 
-async function downloadEpisodeAudio() {
-  if (!currentEpisode) {
-    alert("Nenhum conteúdo selecionado para download.");
-    return;
-  }
-
-  // Se o item carregado (ex: do histórico antigo) estiver sem audioUrl, tenta recuperar automaticamente
-  if (!currentEpisode.audioUrl) {
+async function findFullSongAudioClient(title, showName) {
+  const queries = buildAudioSearchQueries(title, showName);
+  for (const q of queries) {
     try {
-      const queries = buildAudioSearchQueries(currentEpisode.title, currentEpisode.showName);
-      for (const q of queries) {
-        const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=song&limit=1`);
-        const data = await res.json();
-        if (data.results && data.results.length > 0 && data.results[0].previewUrl) {
-          currentEpisode.audioUrl = data.results[0].previewUrl;
-          if (audio) audio.src = currentEpisode.audioUrl;
-          updateHistoryItem(currentEpisode);
-          break;
+      const res = await fetch(`https://saavn.sumit.co/api/search/songs?query=${encodeURIComponent(q)}`);
+      const json = await res.json();
+      const results = json?.data?.results || [];
+      if (results.length > 0) {
+        const match =
+          results.find(s => Number(s.duration) >= 90 && Array.isArray(s.downloadUrl) && s.downloadUrl.length > 0) ||
+          results.find(s => Array.isArray(s.downloadUrl) && s.downloadUrl.length > 0);
+        if (match) {
+          const bestDl = match.downloadUrl[match.downloadUrl.length - 1];
+          if (bestDl && bestDl.url) {
+            const durSec = Number(match.duration) || 210;
+            const mins = Math.floor(durSec / 60);
+            const secs = durSec % 60;
+            return {
+              url: bestDl.url,
+              durationSeconds: durSec,
+              duration: `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
+            };
+          }
         }
       }
     } catch (err) {
-      console.warn("Erro ao tentar buscar áudio de fallback:", err);
+      console.warn(`Erro ao buscar faixa completa para "${q}":`, err);
     }
   }
+  return null;
+}
 
-  if (!currentEpisode.audioUrl && !currentEpisode.spotifyUrl && !currentEpisode.title) {
-    alert("Nenhum áudio disponível para download.");
+async function downloadEpisodeAudio() {
+  if (!currentEpisode) {
+    alert("Nenhum conteúdo selecionado para download.");
     return;
   }
 
@@ -1047,16 +1060,67 @@ async function downloadEpisodeAudio() {
     return;
   }
 
-  // Utiliza a rota de proxy de download do backend (com sourceUrl e artist para baixar o MP3 completo do YouTube)
-  const downloadUrl = `${backendUrl}/api/download?url=${encodeURIComponent(currentEpisode.audioUrl || "")}&title=${encodeURIComponent(currentEpisode.title || "audio")}&sourceUrl=${encodeURIComponent(currentEpisode.spotifyUrl || "")}&artist=${encodeURIComponent(currentEpisode.showName || "")}`;
+  const downloadBtns = document.querySelectorAll('[onclick*="downloadEpisodeAudio"]');
+  const originalHtmlMap = new Map();
+  downloadBtns.forEach(btn => {
+    originalHtmlMap.set(btn, btn.innerHTML);
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Baixando MP3...';
+    btn.disabled = true;
+  });
 
-  const link = document.createElement("a");
-  link.href = downloadUrl;
-  link.target = "_blank"; // Abre em nova aba temporária para forçar o download direto do backend
-  
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  try {
+    // Se estiver sem áudio ou com prévia de 30s do iTunes, substitui imediatamente pela versão COMPLETA (320kbps)
+    if (!currentEpisode.audioUrl || currentEpisode.audioUrl.includes("itunes.apple.com")) {
+      const fullTrack = await findFullSongAudioClient(currentEpisode.title, currentEpisode.showName);
+      if (fullTrack && fullTrack.url) {
+        currentEpisode.audioUrl = fullTrack.url;
+        if (fullTrack.duration) {
+          currentEpisode.duration = fullTrack.duration;
+          currentEpisode.durationSeconds = fullTrack.durationSeconds;
+          if (wsDuration) wsDuration.innerHTML = `<i class="fa-regular fa-clock"></i> ${currentEpisode.duration}`;
+        }
+        if (audio) audio.src = currentEpisode.audioUrl;
+        updateHistoryItem(currentEpisode);
+      }
+    }
+
+    const safeTitle = (currentEpisode.title || "musica").replace(/[^a-z0-9]/gi, "_").toLowerCase();
+
+    // Tenta baixar o arquivo completo diretamente via Blob no navegador (mais rápido e sem depender do Render)
+    if (currentEpisode.audioUrl && !currentEpisode.audioUrl.includes("itunes.apple.com")) {
+      try {
+        const audioRes = await fetch(currentEpisode.audioUrl);
+        if (audioRes.ok) {
+          const blob = await audioRes.blob();
+          const blobUrl = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = blobUrl;
+          a.download = `${safeTitle}.mp3`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+          return;
+        }
+      } catch (directErr) {
+        console.warn("Fallback para proxy do backend no download:", directErr);
+      }
+    }
+
+    // Fallback: Utiliza a rota de proxy de download do backend
+    const downloadUrl = `${backendUrl}/api/download?url=${encodeURIComponent(currentEpisode.audioUrl || "")}&title=${encodeURIComponent(currentEpisode.title || "audio")}&sourceUrl=${encodeURIComponent(currentEpisode.spotifyUrl || "")}&artist=${encodeURIComponent(currentEpisode.showName || "")}`;
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.target = "_blank";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  } finally {
+    downloadBtns.forEach(btn => {
+      btn.innerHTML = originalHtmlMap.get(btn) || '<i class="fa-solid fa-download"></i> Baixar Áudio';
+      btn.disabled = false;
+    });
+  }
 }
 
 function triggerDownload(content, filename, contentType) {

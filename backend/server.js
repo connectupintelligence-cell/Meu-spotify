@@ -114,6 +114,87 @@ async function extractFullYouTubeMp3(rawYoutubeUrl) {
   return null;
 }
 
+/**
+ * Gera lista inteligente de termos de busca para músicas e vídeos do YouTube
+ */
+function buildSongSearchQueries(title = "", showName = "") {
+  const trackName = (title || "").trim();
+  const rawArtist = (showName || "").replace(/\s*-\s*Topic$/i, "").trim();
+  const isGenericArtist = /^(Artista\s*\/\s*Criador|Spotify\s*Creator|Arquivo\s*Local)$/i.test(rawArtist);
+  const artistName = isGenericArtist ? "" : rawArtist;
+
+  const quotedMatch = trackName.match(/["'“”‘’]([^"'“”‘’]+)["'“”‘’]/);
+  const quotedSong = quotedMatch ? quotedMatch[1].trim() : "";
+  const instrumentMatch = trackName.match(/\b(trumpet|horn|saxophone|sax|trombone|piano|violin|guitar|flute|cello|clarinet|orchestra|brass)\b/i);
+  const instrument = instrumentMatch ? instrumentMatch[1].trim() : "";
+
+  const cleanTrackOnly = trackName
+    .replace(/\(.*?\)|\[.*?\]/g, "")
+    .replace(/["'“”‘’]/g, "")
+    .trim();
+
+  const strippedDescriptors = cleanTrackOnly
+    .replace(/\b(horn|duets?|trumpet|solo|cover|live|instrumental|arrangement|version|performance|quartet|trio|ensemble|band|choir|music|video|official|audio|ft\.?|feat\.?)\b/gi, "")
+    .replace(/[-–—:|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return [
+    artistName ? `${artistName} ${cleanTrackOnly}`.trim() : "",
+    artistName ? `${artistName} ${trackName}`.trim() : "",
+    quotedSong && instrument ? `${quotedSong} ${instrument}` : "",
+    quotedSong,
+    strippedDescriptors && instrument ? `${strippedDescriptors} ${instrument}` : "",
+    cleanTrackOnly,
+    strippedDescriptors,
+    trackName,
+    artistName,
+    "Aura Lee"
+  ].filter((q, idx, arr) => q && q.length > 1 && arr.indexOf(q) === idx);
+}
+
+/**
+ * Busca a música COMPLETA (320kbps, duração integral) via API pública sem bloqueio de IP em nuvem
+ */
+async function searchFullLengthSong(title, showName) {
+  const queries = buildSongSearchQueries(title, showName);
+  for (const query of queries) {
+    try {
+      console.log(`[Full Song CDN] Buscando faixa completa 320kbps para: "${query}"`);
+      const res = await axios.get(`https://saavn.sumit.co/api/search/songs?query=${encodeURIComponent(query)}`, {
+        timeout: 8000
+      });
+      const results = res.data?.data?.results || [];
+      if (results.length > 0) {
+        // Prioriza faixas completas (>= 90 segundos) para nunca pegar trechos curtos
+        const match =
+          results.find(s => Number(s.duration) >= 90 && Array.isArray(s.downloadUrl) && s.downloadUrl.length > 0) ||
+          results.find(s => Array.isArray(s.downloadUrl) && s.downloadUrl.length > 0);
+
+        if (match) {
+          const bestDl = match.downloadUrl[match.downloadUrl.length - 1];
+          if (bestDl && bestDl.url) {
+            const durSec = Number(match.duration) || 210;
+            const mins = Math.floor(durSec / 60);
+            const secs = durSec % 60;
+            console.log(`[Full Song CDN] Faixa completa localizada (${durSec}s, ${bestDl.quality}): ${bestDl.url}`);
+            return {
+              url: bestDl.url,
+              durationSeconds: durSec,
+              duration: `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`,
+              artist: match.artists?.primary?.[0]?.name || showName,
+              title: match.name || title
+            };
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`[Full Song CDN] Erro ao consultar "${query}":`, err.message);
+    }
+  }
+  return null;
+}
+
 // Basic health check endpoint
 app.get("/health", (req, res) => {
   res.json({ status: "ok", message: "Spotify Scribe Backend is running!" });
@@ -243,19 +324,31 @@ app.post("/api/transcribe", async (req, res) => {
         artistName = parts[1].trim();
       }
 
-      if (isYouTube) {
-        const fullMp3 = await extractFullYouTubeMp3(url);
-        if (fullMp3) {
-          mp3Url = fullMp3;
-          resolvedFromRss = true;
-        }
-      } else {
-        const ytVideoUrl = await searchYouTubeVideoUrl(`${artistName} ${trackName} audio`);
-        if (ytVideoUrl) {
-          const fullMp3 = await extractFullYouTubeMp3(ytVideoUrl);
+      // 1. Buscar primeiro a faixa COMPLETA em 320kbps (sem bloqueio em servidores cloud/Render)
+      const fullSong = await searchFullLengthSong(trackName, artistName);
+      if (fullSong && fullSong.url) {
+        mp3Url = fullSong.url;
+        durationSeconds = fullSong.durationSeconds;
+        duration = fullSong.duration;
+        resolvedFromRss = true;
+      }
+
+      // 2. Se ainda não encontrou, tentar extração direta do YouTube
+      if (!mp3Url) {
+        if (isYouTube) {
+          const fullMp3 = await extractFullYouTubeMp3(url);
           if (fullMp3) {
             mp3Url = fullMp3;
             resolvedFromRss = true;
+          }
+        } else {
+          const ytVideoUrl = await searchYouTubeVideoUrl(`${artistName} ${trackName} audio`);
+          if (ytVideoUrl) {
+            const fullMp3 = await extractFullYouTubeMp3(ytVideoUrl);
+            if (fullMp3) {
+              mp3Url = fullMp3;
+              resolvedFromRss = true;
+            }
           }
         }
       }
@@ -618,8 +711,15 @@ app.get("/api/download", async (req, res) => {
       targetStreamUrl.includes("itunes.apple.com") ||
       targetStreamUrl.includes("savenow.to");
 
-    // Sempre gera um link novo de MP3 Completo se a origem for YouTube ou se o áudio atual for apenas prévia de 30s do iTunes
-    if (isSourceYouTube || isPreviewOrOneTime) {
+    // Sempre substitui prévias de 30s do iTunes ou links ausentes pelo áudio COMPLETO de 320kbps
+    if (isPreviewOrOneTime && title) {
+      const fullSong = await searchFullLengthSong(title, artist || "");
+      if (fullSong && fullSong.url) {
+        targetStreamUrl = fullSong.url;
+      }
+    }
+
+    if ((isSourceYouTube || isPreviewOrOneTime) && (!targetStreamUrl || targetStreamUrl.includes("itunes.apple.com"))) {
       let ytUrlToConvert = isSourceYouTube ? sourceUrl : null;
       if (!ytUrlToConvert && title) {
         const searchTerm = `${artist && artist !== "Artista / Criador" ? artist : ""} ${title}`.trim();
